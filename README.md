@@ -1,23 +1,53 @@
-# pi05_v2
+# pi05_v2 policy
 
-这是一个独立的 PI0.5 policy 仓库，包含模型推理适配器、OpenPI 源码和训练入口。仓库不包含 Python 虚拟环境、CUDA wheel、checkpoint、训练数据或本地缓存。
+This repository contains the pi05_v2 policy implementation used for RoboSynChallenge evaluation. It includes the policy adapter, OpenPI source, the locked dependency files, and the training entry points.
 
-官方部署流程要求 policy 位于 RoboSynChallenge 的 policy/pi05_v2 下。本仓库也支持独立 clone，然后通过 ROBOSYN_ROOT 指向官方 RoboSynChallenge 工作区。
+The repository intentionally does not contain a Python virtual environment, CUDA wheels, model checkpoints, training datasets, or machine-local caches. The evaluator should install the environment on the evaluation machine and provide the task checkpoints separately.
 
-## 1. 准备官方仿真环境
+## Evaluation layout
 
-先按照 RoboSynChallenge 官方安装说明准备仿真环境，并记录官方工作区路径：
+The official RoboSynChallenge source tree and this policy repository are kept separate:
+
+~~~
+/path/to/
+├── RoboSynChallenge/          # official RoboSynChallenge checkout
+└── pi05_v2/                   # this repository
+~~~
+
+The policy launcher accepts the official checkout through ROBOSYN_ROOT. It can also be copied to:
+
+~~~
+RoboSynChallenge/policy/pi05_v2/
+~~~
+
+The official simulator environment and this policy environment are separate. The simulator uses the Python environment prepared by RoboSynChallenge; the PI0.5 worker uses pi05_v2/.venv.
+
+## 1. Install the official simulator environment
+
+Install RoboSynChallenge and EmbodiChain according to the official installation guide:
+
+https://edem-ai.github.io/RoboSynChallenge/html/getting_started/installation.html
+
+After installation, set the official checkout path and load its launcher environment:
 
 ~~~
 export ROBOSYN_ROOT=/path/to/RoboSynChallenge
 source "$ROBOSYN_ROOT/deployment/local-env.sh"
 ~~~
 
-local-env.sh 是 RoboSynChallenge 仿真环境的启动脚本，不属于本仓库。它负责 EmbodiChain、DexSim、FFmpeg 和仿真资源的路径设置。
+local-env.sh must be sourced in the shell that starts evaluation. It configures the official simulator, EmbodiChain, DexSim, FFmpeg, assets, and simulator-side Python environment. It is not part of this policy repository.
 
-## 2. 安装 pi05_v2 推理环境
+The evaluation host must have:
 
-本仓库不提交环境本身，只提交锁定的依赖声明和安装脚本。需要 Python 3.11、uv，以及能访问 PyPI 的网络：
+- Python 3.11
+- A working NVIDIA driver and CUDA runtime compatible with the installed JAX and PyTorch wheels
+- An available physical GPU for the simulator and PI0.5 worker
+- uv available on PATH
+- The official RoboSynChallenge checkout and downloaded simulator assets
+
+## 2. Install the locked PI0.5 environment
+
+Set the policy checkout path and run the provided installer:
 
 ~~~
 export PI05_ROOT=/path/to/pi05_v2
@@ -25,78 +55,45 @@ cd "$PI05_ROOT"
 bash setup_runtime.sh
 ~~~
 
-安装结果位于：
+setup_runtime.sh performs the following steps:
+
+1. Creates PI05_ROOT/.venv with Python 3.11 when needed.
+2. Installs the project and workspace packages with uv sync --frozen --no-dev.
+3. Uses pyproject.toml and uv.lock without changing the lock file.
+4. Runs uv pip check.
+5. Verifies the bundled PaliGemma tokenizer checksum and downloads it only when it is absent.
+
+For a normal online installation, the command used by the installer is:
 
 ~~~
-$PI05_ROOT/.venv
+uv sync --frozen --no-dev --python 3.11
+uv pip check --python "$PI05_ROOT/.venv/bin/python"
 ~~~
 
-该环境使用本仓库的 pyproject.toml 和 uv.lock。推理时不使用其他用户的 Python 环境，也不要求 Docker。
-
-如果网络受限，可以先把官方 Linux x86_64 / CPython 3.11 wheel 放入 runtime_wheels/，再运行 setup_runtime.sh；wheel 文件本身没有提交到 GitHub。
-
-## 3. 依赖文件和环境变量
-
-仓库中的依赖文件有明确分工：
-
-| 文件 | 用途 |
-| --- | --- |
-| pyproject.toml | 项目元数据、直接依赖、Python 版本和 uv workspace 配置 |
-| uv.lock | uv 的完整锁文件，固定传递依赖、版本和下载哈希；正式安装使用它 |
-| runtime-requirements.txt | 从 uv.lock 导出的带哈希 requirements 文件，适合审计或离线下载 |
-| requirements.txt | pip 兼容入口，内部引用 runtime-requirements.txt |
-| setup_runtime.sh | 创建本地 .venv、执行 frozen 安装、运行依赖检查并校验 tokenizer |
-| runtime_assets/openpi/big_vision/paligemma_tokenizer.model | PI0.5 推理需要的 tokenizer 资源 |
-
-仓库不包含 uv 可执行文件。目标机器需要先安装 Astral uv，并确认版本：
+If uv is not installed, install Astral uv using the official installer or the system package manager, then verify:
 
 ~~~
 uv --version
 python3.11 --version
 ~~~
 
-没有 uv 时，可以按官方方式安装：
+The canonical dependency files are:
 
-~~~
-curl -LsSf https://astral.sh/uv/install.sh | sh
-export PATH="$HOME/.local/bin:$PATH"
-~~~
-
-也可以不使用安装脚本，手动执行与 setup_runtime.sh 相同的步骤：
-
-~~~
-cd "$PI05_ROOT"
-unset VIRTUAL_ENV
-export UV_PROJECT_ENVIRONMENT="$PI05_ROOT/.venv"
-export UV_CACHE_DIR="$PI05_ROOT/.cache/uv"
-export UV_LINK_MODE=hardlink
-uv venv --python 3.11 .venv
-uv sync --frozen --no-dev --python 3.11
-uv pip check --python "$PI05_ROOT/.venv/bin/python"
-~~~
-
-uv sync --frozen 不会修改 uv.lock。不要使用 uv lock 或不带 --frozen 的同步来改变提交中的锁文件，除非你明确要升级依赖。
-
-当前推理环境的关键版本由锁文件固定，包括 Python 3.11、JAX 0.5.3、Flax 0.10.2、Orbax Checkpoint 0.11.13、NumPy 1.x、PyTorch 2.7.1、Transformers 4.53.2 和 LeRobot 的固定 Git revision。JAX 使用 CUDA 12 wheel；机器仍需要可用的 NVIDIA 驱动。
-
-常用环境变量：
-
-| 变量 | 作用 |
+| File | Purpose |
 | --- | --- |
-| ROBOSYN_ROOT | 官方 RoboSynChallenge 工作区，包含 deployment/local-env.sh 和 scripts/eval_policy.py |
-| PI05_ROOT | 本仓库 clone 的路径 |
-| PI05_PYTHON | 覆盖 PI0.5 worker 的 Python，默认是 $PI05_ROOT/.venv/bin/python |
-| PYTHON_BIN / ROBOSYN_VENV_DIR | 覆盖 RoboSynChallenge 仿真环境 Python |
-| OPENPI_ROOT | 覆盖 OpenPI 源码目录，默认是 $PI05_ROOT |
-| UV_CACHE_DIR | uv 下载缓存目录，建议放在数据盘 |
-| OPENPI_DATA_HOME | OpenPI tokenizer 和运行时数据目录 |
-| XLA_PYTHON_CLIENT_PREALLOCATE | JAX 显存预分配开关；显存共享时建议设为 false |
+| pyproject.toml | Project metadata, direct dependencies, Python requirement, and uv workspace configuration |
+| uv.lock | Complete reproducible dependency lock with versions and hashes |
+| runtime-requirements.txt | Hash-pinned requirements exported from uv.lock |
+| requirements.txt | pip-compatible entry point that includes runtime-requirements.txt |
+| setup_runtime.sh | Environment creation, frozen installation, dependency check, and tokenizer verification |
 
-deployment/local-env.sh 只负责官方仿真环境，不会替代 PI0.5 的 .venv。两套环境由 eval.sh 分别调用。
+The locked runtime includes Python 3.11, JAX 0.5.3, Flax 0.10.2, Orbax Checkpoint 0.11.13, NumPy 1.x, PyTorch 2.7.1, Transformers 4.53.2, and the pinned LeRobot revision. The repository does not require Docker.
 
-## 4. 准备模型
+For an offline installation, provide a directory named runtime_wheels containing the Linux x86_64 / CPython 3.11 wheels listed by the lock manifest before running setup_runtime.sh. Wheel bundles are intentionally excluded from this Git repository.
 
-每个模型目录都必须包含 JAX checkpoint 和对应归一化统计：
+## 3. Checkpoint layout and model names
+
+The evaluator supplies one checkpoint for each submitted task. The checkpoint directory must contain:
 
 ~~~
 <checkpoint>/
@@ -106,7 +103,7 @@ deployment/local-env.sh 只负责官方仿真环境，不会替代 PI0.5 的 .ve
         └── norm_stats.json
 ~~~
 
-建议把模型目录按任务名保存，例如：
+The submitted model directory should be named exactly after the task. For example:
 
 ~~~
 /path/to/checkpoints/
@@ -122,11 +119,11 @@ deployment/local-env.sh 只负责官方仿真环境，不会替代 PI0.5 的 .ve
 └── sample_loading/
 ~~~
 
-checkpoint 不包含在本仓库中。命令中的 <model_root>/<task_name> 需要替换成实际模型目录。
+No checkpoint is included in this repository.
 
-## 5. 通用推理命令
+## 4. Evaluation command format
 
-eval.sh 的参数格式为：
+The policy launcher accepts:
 
 ~~~
 bash "$PI05_ROOT/eval.sh" \
@@ -134,24 +131,25 @@ bash "$PI05_ROOT/eval.sh" \
   --max_episodes 20 --headless true
 ~~~
 
-如果 policy 仓库没有放到 RoboSynChallenge 的 policy/pi05_v2 目录，必须设置 ROBOSYN_ROOT：
+Set ROBOSYN_ROOT before calling eval.sh when the policy repository is outside the official checkout:
 
 ~~~
 export ROBOSYN_ROOT=/path/to/RoboSynChallenge
 export PI05_ROOT=/path/to/pi05_v2
 source "$ROBOSYN_ROOT/deployment/local-env.sh"
-bash "$PI05_ROOT/eval.sh" click_bell random \
-  /path/to/checkpoints/click_bell 0 \
-  --max_episodes 20 --headless true
 ~~~
 
-<gpu_id> 是服务器的物理 GPU 编号。脚本会让仿真器使用物理编号，并只将同一编号传给 JAX worker。模型推理使用 pi05_v2/.venv。
+gpu_id is a physical GPU index. The launcher leaves the simulator unmasked and passes the selected physical index to the PI0.5 worker. The worker always uses PI05_ROOT/.venv unless PI05_PYTHON is explicitly supplied.
 
-## 6. 十个任务的推理命令
+The launcher sets EMBODICHAIN_SIM_EXIT_PROCESS=0 so that the official evaluator can save evaluation_metrics.json during normal environment cleanup.
 
-假设模型目录为 /path/to/checkpoints/<task_name>，下面每条命令运行 20 个随机 episode。把 0 改成空闲的物理 GPU 编号。
+## 5. Ten official task commands
+
+The following commands assume that MODEL_ROOT contains one checkpoint directory per task and that the submitted directory name matches the task name. Replace 0 with an available physical GPU index.
 
 ~~~
+export MODEL_ROOT=/path/to/checkpoints
+
 bash "$PI05_ROOT/eval.sh" click_bell random \
   "$MODEL_ROOT/click_bell" 0 --max_episodes 20 --headless true
 
@@ -183,18 +181,18 @@ bash "$PI05_ROOT/eval.sh" sample_loading random \
   "$MODEL_ROOT/sample_loading" 0 --max_episodes 20 --headless true
 ~~~
 
-若模型对应的官方评测 setting 是 clear，将命令中的 random 替换为 clear。模型目录名可以直接使用对应任务名，命令中的任务名和 checkpoint 目录必须保持一致。
+Use clear instead of random when the official evaluation protocol for the checkpoint requires the clear setting.
 
-## 7. 运行结果
+## 6. Evaluation outputs
 
-官方评测器会在 RoboSynChallenge 工作区写入：
+The official evaluator writes results under the RoboSynChallenge checkout:
 
 ~~~
 $ROBOSYN_ROOT/eval_result/<task>/<policy>/<setting>/
 ~~~
 
-每个 run 目录包含视频和 evaluation_metrics.json。success 表示任务成功；truncated 只表示环境达到时间上限，不表示任务成功。
+Each run directory contains the recorded videos and evaluation_metrics.json. In the adapter contract, success stops the current action chunk without being reported as truncation. truncated is reserved for the environment time limit.
 
-## 8. 训练代码
+## 7. Training sources
 
-本仓库保留 OpenPI 的 JAX/PyTorch 训练入口和 RoboSyn/Robotwin 配置。训练数据、初始权重和训练输出需要在目标机器单独准备，默认路径和环境变量说明见 LOCAL_SETUP.txt。
+The repository retains the OpenPI JAX/PyTorch training entry points and the RoboSyn/Robotwin configuration. Training data, initial weights, and training output directories are not included. The path overrides and training-only setup are documented in LOCAL_SETUP.txt.
