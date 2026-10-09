@@ -1,6 +1,141 @@
-source deployment/local-env.sh
-cd RoboSynChallenge
+# pi05_v2
 
-bash policy/pi05_v2/eval.sh click_bell random \
-  /path/to/checkpoint \
-  4 --max_episodes 20 --headless true
+这是一个独立的 PI0.5 policy 仓库，包含模型推理适配器、OpenPI 源码和训练入口。仓库不包含 Python 虚拟环境、CUDA wheel、checkpoint、训练数据或本地缓存。
+
+官方部署流程要求 policy 位于 RoboSynChallenge 的 policy/pi05_v2 下。本仓库也支持独立 clone，然后通过 ROBOSYN_ROOT 指向官方 RoboSynChallenge 工作区。
+
+## 1. 准备官方仿真环境
+
+先按照 RoboSynChallenge 官方安装说明准备仿真环境，并记录官方工作区路径：
+
+~~~
+export ROBOSYN_ROOT=/path/to/RoboSynChallenge
+source "$ROBOSYN_ROOT/deployment/local-env.sh"
+~~~
+
+local-env.sh 是 RoboSynChallenge 仿真环境的启动脚本，不属于本仓库。它负责 EmbodiChain、DexSim、FFmpeg 和仿真资源的路径设置。
+
+## 2. 安装 pi05_v2 推理环境
+
+本仓库不提交环境本身，只提交锁定的依赖声明和安装脚本。需要 Python 3.11、uv，以及能访问 PyPI 的网络：
+
+~~~
+export PI05_ROOT=/path/to/pi05_v2
+cd "$PI05_ROOT"
+bash setup_runtime.sh
+~~~
+
+安装结果位于：
+
+~~~
+$PI05_ROOT/.venv
+~~~
+
+该环境使用本仓库的 pyproject.toml 和 uv.lock。推理时不使用其他用户的 Python 环境，也不要求 Docker。
+
+如果网络受限，可以先把官方 Linux x86_64 / CPython 3.11 wheel 放入 runtime_wheels/，再运行 setup_runtime.sh；wheel 文件本身没有提交到 GitHub。
+
+## 3. 准备模型
+
+每个模型目录都必须包含 JAX checkpoint 和对应归一化统计：
+
+~~~
+<checkpoint>/
+├── params/
+└── assets/
+    └── <repo_id>/
+        └── norm_stats.json
+~~~
+
+建议把模型目录按任务名保存，例如：
+
+~~~
+/path/to/checkpoints/
+├── click_bell/
+├── handle_basket/
+├── water_pouring/
+├── table_rearrangement/
+├── items_handover/
+├── drawer_open_place/
+├── mixer_operating/
+├── item_assembly/
+├── manipulate_pipette/
+└── sample_loading/
+~~~
+
+checkpoint 不包含在本仓库中。命令中的 <model_root>/<task_name> 需要替换成实际模型目录。
+
+## 4. 通用推理命令
+
+eval.sh 的参数格式为：
+
+~~~
+bash "$PI05_ROOT/eval.sh" \
+  <task_name> random <checkpoint_path> <gpu_id> \
+  --max_episodes 20 --headless true
+~~~
+
+如果 policy 仓库没有放到 RoboSynChallenge 的 policy/pi05_v2 目录，必须设置 ROBOSYN_ROOT：
+
+~~~
+export ROBOSYN_ROOT=/path/to/RoboSynChallenge
+export PI05_ROOT=/path/to/pi05_v2
+source "$ROBOSYN_ROOT/deployment/local-env.sh"
+bash "$PI05_ROOT/eval.sh" click_bell random \
+  /path/to/checkpoints/click_bell 0 \
+  --max_episodes 20 --headless true
+~~~
+
+<gpu_id> 是服务器的物理 GPU 编号。脚本会让仿真器使用物理编号，并只将同一编号传给 JAX worker。模型推理使用 pi05_v2/.venv。
+
+## 5. 十个任务的推理命令
+
+假设模型目录为 /path/to/checkpoints/<task_name>，下面每条命令运行 20 个随机 episode。把 0 改成空闲的物理 GPU 编号。
+
+~~~
+bash "$PI05_ROOT/eval.sh" click_bell random \
+  "$MODEL_ROOT/click_bell" 0 --max_episodes 20 --headless true
+
+bash "$PI05_ROOT/eval.sh" handle_basket random \
+  "$MODEL_ROOT/handle_basket" 0 --max_episodes 20 --headless true
+
+bash "$PI05_ROOT/eval.sh" water_pouring random \
+  "$MODEL_ROOT/water_pouring" 0 --max_episodes 20 --headless true
+
+bash "$PI05_ROOT/eval.sh" table_rearrangement random \
+  "$MODEL_ROOT/table_rearrangement" 0 --max_episodes 20 --headless true
+
+bash "$PI05_ROOT/eval.sh" items_handover random \
+  "$MODEL_ROOT/items_handover" 0 --max_episodes 20 --headless true
+
+bash "$PI05_ROOT/eval.sh" drawer_open_place random \
+  "$MODEL_ROOT/drawer_open_place" 0 --max_episodes 20 --headless true
+
+bash "$PI05_ROOT/eval.sh" mixer_operating random \
+  "$MODEL_ROOT/mixer_operating" 0 --max_episodes 20 --headless true
+
+bash "$PI05_ROOT/eval.sh" item_assembly random \
+  "$MODEL_ROOT/item_assembly" 0 --max_episodes 20 --headless true
+
+bash "$PI05_ROOT/eval.sh" manipulate_pipette random \
+  "$MODEL_ROOT/manipulate_pipette" 0 --max_episodes 20 --headless true
+
+bash "$PI05_ROOT/eval.sh" sample_loading random \
+  "$MODEL_ROOT/sample_loading" 0 --max_episodes 20 --headless true
+~~~
+
+若模型对应的官方评测 setting 是 clear，将命令中的 random 替换为 clear。模型目录名可以直接使用对应任务名，命令中的任务名和 checkpoint 目录必须保持一致。
+
+## 6. 运行结果
+
+官方评测器会在 RoboSynChallenge 工作区写入：
+
+~~~
+$ROBOSYN_ROOT/eval_result/<task>/<policy>/<setting>/
+~~~
+
+每个 run 目录包含视频和 evaluation_metrics.json。success 表示任务成功；truncated 只表示环境达到时间上限，不表示任务成功。
+
+## 7. 训练代码
+
+本仓库保留 OpenPI 的 JAX/PyTorch 训练入口和 RoboSyn/Robotwin 配置。训练数据、初始权重和训练输出需要在目标机器单独准备，默认路径和环境变量说明见 LOCAL_SETUP.txt。
