@@ -6,19 +6,21 @@ The repository intentionally does not contain a Python virtual environment, CUDA
 
 ## Evaluation layout
 
-The official RoboSynChallenge source tree and this policy repository are kept separate:
-
-~~~
-/path/to/
-├── RoboSynChallenge/          # official RoboSynChallenge checkout
-└── pi05_v2/                   # this repository
-~~~
-
-The policy launcher accepts the official checkout through ROBOSYN_ROOT. It can also be copied to:
+The official evaluation checkout is expected to contain this repository at:
 
 ~~~
 RoboSynChallenge/policy/pi05_v2/
 ~~~
+
+For a fresh official checkout, clone this repository directly into the policy directory:
+
+~~~
+cd /path/to/RoboSynChallenge/policy
+git clone https://github.com/smalltmm/pi05_v2.git pi05_v2
+export PI05_ROOT=/path/to/RoboSynChallenge/policy/pi05_v2
+~~~
+
+The policy launcher uses the official RoboSynChallenge root through ROBOSYN_ROOT. A standalone clone is also supported when ROBOSYN_ROOT is set explicitly.
 
 The official simulator environment and this policy environment are separate. The simulator uses the Python environment prepared by RoboSynChallenge; the PI0.5 worker uses pi05_v2/.venv.
 
