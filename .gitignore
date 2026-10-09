@@ -1,0 +1,19 @@
+.venv/
+__pycache__/
+*.py[cod]
+.cache/
+.jax_cache/
+training_data/
+assets/
+checkpoints/
+logs/
+wandb/
+pi05_base/
+pi05_base_pytorch/
+runtime_wheels/
+# Local upload/runtime metadata
+.ms_upload_cache
+*.tmp
+runtime-packages.txt
+runtime-download-plan.json
+runtime-wheel-manifest.json

@@ -1,0 +1,29 @@
+policy_name: pi05_v2
+task_name: null
+setting: random
+model_name: pi05_v2
+seed: 0
+max_episodes: 20
+max_steps: 1000
+num_envs: 1
+headless: true
+device: cpu
+gpu_id: 0
+filter_dataset_saving: true
+
+eval_video_log: true
+eval_video_obs_keys:
+  - cam_high
+  - cam_left_wrist
+  - cam_right_wrist
+
+eval_expert_check: true
+checkpoint_path: null
+train_config_name: pi05_robosyn_robotwin_piper_jax_full
+openpi_root: null
+pi05_python: ""
+pi05_exec_steps: 25
+pi05_num_inference_steps: 10
+pi05_cuda_visible_devices: ""
+strict_action_dim: true
+pi05_debug_actions: false

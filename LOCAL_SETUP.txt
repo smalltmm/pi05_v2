@@ -1,0 +1,68 @@
+pi05_v2 本地整理与迁移说明
+
+来源
+  已完整复制用户指定的 pi05_v2_openpi_training，共 185 个来源文件。
+  旧 src 已替换。来源目录未修改。
+  原始版本校验值、修改文件清单和旧目录备份位置见 code-provenance.json。
+  这是用户模型配套的训练代码，不是官方仓库原版 policy/pi05。
+
+目录
+  src/openpi/                  模型、训练配置、数据处理代码
+  scripts/train.py             JAX 训练入口
+  scripts/train_pytorch.py     PyTorch 训练入口
+  scripts/compute_norm_stats.py 归一化统计
+  packages/openpi-client/      配套客户端
+  pyproject.toml、uv.lock      原训练项目的依赖声明与锁文件
+  deploy_policy.py、pi05_worker.py、eval.sh、deploy_policy.yml 评测适配器
+  training_data/               训练数据位置（尚未放入数据）
+  assets/                     归一化统计等资源位置（尚未放入资源）
+  checkpoints/                权重与训练输出位置（尚未放入权重）
+  pi05_base/params/            JAX 初始权重位置（尚未放入权重）
+
+路径约定
+  默认路径根据脚本或源码文件的位置计算，不依赖用户名、服务器挂载点或调用时目录。
+  eval.sh 默认 OPENPI_ROOT 是自身所在的 pi05_v2。
+  deploy_policy.yml 的 openpi_root 为 null，由适配器定位自身目录。
+  仿真环境默认使用工作区 .venv；模型独立环境默认使用 pi05_v2/.venv。
+  可通过 PYTHON_BIN、ROBOSYN_VENV_DIR、PI05_PYTHON 显式指定评测机的环境。
+  迁移代码时应在目标机器重新准备环境，不要把本机虚拟环境当成可移植代码。
+  eval.sh 的相对 checkpoint 参数相对于调用时的当前目录；切换目录前会转成绝对路径。
+  训练配置的相对路径覆盖值相对于 pi05_v2，支持以下环境变量：
+    ROBOSYN_DATASET_ROOT、ROBOTWIN_DATASET_ROOT
+    PI05_ASSETS_DIR、PI05_CHECKPOINTS_DIR
+    PI05_BASE_PARAMS、PI05_PYTORCH_BASE_DIR、PI05_FINETUNE_PARAMS
+  默认训练数据位于 training_data/Robosyn_Datasets 和
+  training_data/Robotwin2.0-lerobot-piper-v2。
+  原训练超参数、混合数据集配置和模型变换保持来源版本，仅调整路径定位。
+
+评测示例（从 RoboSynChallenge 根目录执行；替换为实际权重路径）
+  bash policy/pi05_v2/eval.sh click_bell random \
+    policy/pi05_v2/checkpoints/my_model/10000 0 \
+    --max_episodes 20 --headless true
+
+  checkpoint 目录需要 params/ 和 assets/<repo_id>/norm_stats.json。
+  当前服务器运行仿真前仍需要激活 deployment/local-env.sh；
+  eval.sh 不自动引用该机器专用文件，其他评测机器可提供自己的环境。
+
+训练与统计入口（依赖、数据和初始权重准备好后才可运行）
+  cd policy/pi05_v2
+  PYTHONPATH="$PWD/src:$PWD/packages/openpi-client/src" \
+    .venv/bin/python scripts/compute_norm_stats.py \
+    --config-name pi05_robosyn_robotwin_piper
+  bash scripts/train_pi05_robosyn_robotwin_piper_jax.sh
+
+  shared JAX 配置名称：pi05_robosyn_robotwin_piper_jax_full。
+  shared JAX 配置复用 assets/pi05_robosyn_robotwin_piper 下的归一化统计。
+  单任务微调默认保留来源项目的 20000 步初始化权重相对路径，
+  如使用其他起点，请显式设置 PI05_FINETUNE_PARAMS。
+  scripts/docker 下的安装脚本按来源原样保留，不属于此次无 sudo 本地部署入口。
+
+验证范围
+  已检查 Python、活动 Bash 入口和 TOML 语法。
+  已在临时迁移目录（含空格）从无关工作目录验证评测路径及参数传递。
+  已验证相对 checkpoint、相对解释器/source 覆盖、可选 GPU 参数。
+  已验证训练配置路径函数及 JAX 启动器 dry-run。
+  上述入口测试使用替身解释器，没有加载模型或分配 GPU。
+  已按原始 pyproject.toml/uv.lock 安装独立 PI0.5 推理环境至 pi05_v2/.venv；uv pip check 通过。
+  已使用指定 checkpoint 完成 click_bell/random、seed 0、20 回合官方评测：18/20（90.0%），指标见 deployment/pi05-v2-click-bell-summary.json。
+  本机使用 EMBODICHAIN_SIM_EXIT_PROCESS=0 保存官方 metrics；评测适配器已通过 success/truncation 回归检查。
