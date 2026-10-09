@@ -1,0 +1,4 @@
+# Compatibility entry point for pip users.
+# The canonical reproducible installation is:
+#   uv sync --frozen --no-dev --python 3.11
+-r runtime-requirements.txt

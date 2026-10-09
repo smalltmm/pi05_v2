@@ -35,6 +35,65 @@ $PI05_ROOT/.venv
 
 如果网络受限，可以先把官方 Linux x86_64 / CPython 3.11 wheel 放入 runtime_wheels/，再运行 setup_runtime.sh；wheel 文件本身没有提交到 GitHub。
 
+## 3. 依赖文件和环境变量
+
+仓库中的依赖文件有明确分工：
+
+| 文件 | 用途 |
+| --- | --- |
+| pyproject.toml | 项目元数据、直接依赖、Python 版本和 uv workspace 配置 |
+| uv.lock | uv 的完整锁文件，固定传递依赖、版本和下载哈希；正式安装使用它 |
+| runtime-requirements.txt | 从 uv.lock 导出的带哈希 requirements 文件，适合审计或离线下载 |
+| requirements.txt | pip 兼容入口，内部引用 runtime-requirements.txt |
+| setup_runtime.sh | 创建本地 .venv、执行 frozen 安装、运行依赖检查并校验 tokenizer |
+| runtime_assets/openpi/big_vision/paligemma_tokenizer.model | PI0.5 推理需要的 tokenizer 资源 |
+
+仓库不包含 uv 可执行文件。目标机器需要先安装 Astral uv，并确认版本：
+
+~~~
+uv --version
+python3.11 --version
+~~~
+
+没有 uv 时，可以按官方方式安装：
+
+~~~
+curl -LsSf https://astral.sh/uv/install.sh | sh
+export PATH="$HOME/.local/bin:$PATH"
+~~~
+
+也可以不使用安装脚本，手动执行与 setup_runtime.sh 相同的步骤：
+
+~~~
+cd "$PI05_ROOT"
+unset VIRTUAL_ENV
+export UV_PROJECT_ENVIRONMENT="$PI05_ROOT/.venv"
+export UV_CACHE_DIR="$PI05_ROOT/.cache/uv"
+export UV_LINK_MODE=hardlink
+uv venv --python 3.11 .venv
+uv sync --frozen --no-dev --python 3.11
+uv pip check --python "$PI05_ROOT/.venv/bin/python"
+~~~
+
+uv sync --frozen 不会修改 uv.lock。不要使用 uv lock 或不带 --frozen 的同步来改变提交中的锁文件，除非你明确要升级依赖。
+
+当前推理环境的关键版本由锁文件固定，包括 Python 3.11、JAX 0.5.3、Flax 0.10.2、Orbax Checkpoint 0.11.13、NumPy 1.x、PyTorch 2.7.1、Transformers 4.53.2 和 LeRobot 的固定 Git revision。JAX 使用 CUDA 12 wheel；机器仍需要可用的 NVIDIA 驱动。
+
+常用环境变量：
+
+| 变量 | 作用 |
+| --- | --- |
+| ROBOSYN_ROOT | 官方 RoboSynChallenge 工作区，包含 deployment/local-env.sh 和 scripts/eval_policy.py |
+| PI05_ROOT | 本仓库 clone 的路径 |
+| PI05_PYTHON | 覆盖 PI0.5 worker 的 Python，默认是 $PI05_ROOT/.venv/bin/python |
+| PYTHON_BIN / ROBOSYN_VENV_DIR | 覆盖 RoboSynChallenge 仿真环境 Python |
+| OPENPI_ROOT | 覆盖 OpenPI 源码目录，默认是 $PI05_ROOT |
+| UV_CACHE_DIR | uv 下载缓存目录，建议放在数据盘 |
+| OPENPI_DATA_HOME | OpenPI tokenizer 和运行时数据目录 |
+| XLA_PYTHON_CLIENT_PREALLOCATE | JAX 显存预分配开关；显存共享时建议设为 false |
+
+deployment/local-env.sh 只负责官方仿真环境，不会替代 PI0.5 的 .venv。两套环境由 eval.sh 分别调用。
+
 ## 3. 准备模型
 
 每个模型目录都必须包含 JAX checkpoint 和对应归一化统计：
