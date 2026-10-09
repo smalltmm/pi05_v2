@@ -94,7 +94,7 @@ uv sync --frozen 不会修改 uv.lock。不要使用 uv lock 或不带 --frozen 
 
 deployment/local-env.sh 只负责官方仿真环境，不会替代 PI0.5 的 .venv。两套环境由 eval.sh 分别调用。
 
-## 3. 准备模型
+## 4. 准备模型
 
 每个模型目录都必须包含 JAX checkpoint 和对应归一化统计：
 
@@ -124,7 +124,7 @@ deployment/local-env.sh 只负责官方仿真环境，不会替代 PI0.5 的 .ve
 
 checkpoint 不包含在本仓库中。命令中的 <model_root>/<task_name> 需要替换成实际模型目录。
 
-## 4. 通用推理命令
+## 5. 通用推理命令
 
 eval.sh 的参数格式为：
 
@@ -147,7 +147,7 @@ bash "$PI05_ROOT/eval.sh" click_bell random \
 
 <gpu_id> 是服务器的物理 GPU 编号。脚本会让仿真器使用物理编号，并只将同一编号传给 JAX worker。模型推理使用 pi05_v2/.venv。
 
-## 5. 十个任务的推理命令
+## 6. 十个任务的推理命令
 
 假设模型目录为 /path/to/checkpoints/<task_name>，下面每条命令运行 20 个随机 episode。把 0 改成空闲的物理 GPU 编号。
 
@@ -185,7 +185,7 @@ bash "$PI05_ROOT/eval.sh" sample_loading random \
 
 若模型对应的官方评测 setting 是 clear，将命令中的 random 替换为 clear。模型目录名可以直接使用对应任务名，命令中的任务名和 checkpoint 目录必须保持一致。
 
-## 6. 运行结果
+## 7. 运行结果
 
 官方评测器会在 RoboSynChallenge 工作区写入：
 
@@ -195,6 +195,6 @@ $ROBOSYN_ROOT/eval_result/<task>/<policy>/<setting>/
 
 每个 run 目录包含视频和 evaluation_metrics.json。success 表示任务成功；truncated 只表示环境达到时间上限，不表示任务成功。
 
-## 7. 训练代码
+## 8. 训练代码
 
 本仓库保留 OpenPI 的 JAX/PyTorch 训练入口和 RoboSyn/Robotwin 配置。训练数据、初始权重和训练输出需要在目标机器单独准备，默认路径和环境变量说明见 LOCAL_SETUP.txt。
