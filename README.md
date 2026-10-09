@@ -12,15 +12,17 @@ The official evaluation checkout is expected to contain this repository at:
 RoboSynChallenge/policy/pi05_v2/
 ~~~
 
-For a fresh official checkout, clone this repository directly into the policy directory:
+Place the contents of this repository at the following location (including this README, eval.sh and src/). To avoid a nested Git repository, clone to a separate staging directory and export the tracked files:
 
-~~~
-cd /path/to/RoboSynChallenge/policy
-git clone https://github.com/smalltmm/pi05_v2.git pi05_v2
-export PI05_ROOT=/path/to/RoboSynChallenge/policy/pi05_v2
+~~~bash
+git clone https://github.com/smalltmm/pi05_v2.git /path/to/pi05_v2-source
+export ROBOSYN_ROOT=/path/to/RoboSynChallenge_ws/RoboSynChallenge
+mkdir -p "$ROBOSYN_ROOT/policy/pi05_v2"
+git -C /path/to/pi05_v2-source archive HEAD | tar -x -C "$ROBOSYN_ROOT/policy/pi05_v2"
+export PI05_ROOT="$ROBOSYN_ROOT/policy/pi05_v2"
 ~~~
 
-The policy launcher uses the official RoboSynChallenge root through ROBOSYN_ROOT. A standalone clone is also supported when ROBOSYN_ROOT is set explicitly.
+The launcher infers the RoboSynChallenge root from this layout. ROBOSYN_ROOT can override that root, but the official evaluator still requires the policy under its policy/pi05_v2 directory.
 
 The official simulator environment and this policy environment are separate. The simulator uses the Python environment prepared by RoboSynChallenge; the PI0.5 worker uses pi05_v2/.venv.
 
@@ -30,14 +32,24 @@ Install RoboSynChallenge and EmbodiChain according to the official installation 
 
 https://edem-ai.github.io/RoboSynChallenge/html/getting_started/installation.html
 
-After installation, set the official checkout path and load its launcher environment:
+Use the simulator environment already prepared by the official installation. No deployment/local-env.sh is required; that file was a machine-specific helper and is not supplied by the official repository.
 
-~~~
-export ROBOSYN_ROOT=/path/to/RoboSynChallenge
-source "$ROBOSYN_ROOT/deployment/local-env.sh"
+Either activate the environment as usual (virtualenv or Conda), or provide its interpreter explicitly:
+
+~~~bash
+# Any location is supported. This is the SIMULATOR Python, not the PI0.5 worker.
+export PYTHON_BIN=/path/to/simulator-environment/bin/python
+"$PYTHON_BIN" -c "import embodichain, dexsim, robosynchallenge, torch; print('Simulator imports OK')"
 ~~~
 
-local-env.sh must be sourced in the shell that starts evaluation. It configures the official simulator, EmbodiChain, DexSim, FFmpeg, assets, and simulator-side Python environment. It is not part of this policy repository.
+Alternatively, set ROBOSYN_VENV_DIR to the environment directory. With neither variable set, eval.sh checks these candidates in order and selects the first executable that can locate embodichain, dexsim, robosynchallenge and torch:
+
+1. The activated virtualenv (VIRTUAL_ENV), then the activated Conda environment (CONDA_PREFIX).
+2. EmbodiChain/.venv in the sibling EmbodiChain checkout (or EMBODICHAIN_ROOT/.venv).
+3. RoboSynChallenge/.venv, then the workspace .venv, for other installation layouts.
+4. python and python3 on PATH.
+
+The official local installation example creates EmbodiChain/.venv; it is a supported candidate, not a required location. An explicit PYTHON_BIN takes priority over ROBOSYN_VENV_DIR. Invalid explicit selections produce an error instead of silently switching environments. The launcher prints both selected Python paths before evaluation.
 
 The evaluation host must have:
 
@@ -52,7 +64,7 @@ The evaluation host must have:
 Set the policy checkout path and run the provided installer:
 
 ~~~
-export PI05_ROOT=/path/to/pi05_v2
+export PI05_ROOT="$ROBOSYN_ROOT/policy/pi05_v2"
 cd "$PI05_ROOT"
 bash setup_runtime.sh
 ~~~
@@ -86,12 +98,12 @@ The canonical dependency files are:
 | pyproject.toml | Project metadata, direct dependencies, Python requirement, and uv workspace configuration |
 | uv.lock | Complete reproducible dependency lock with versions and hashes |
 | runtime-requirements.txt | Hash-pinned requirements exported from uv.lock |
-| requirements.txt | pip-compatible entry point that includes runtime-requirements.txt |
+| requirements.txt | Dependency-list entry point that includes runtime-requirements.txt; does not install the local workspace packages |
 | setup_runtime.sh | Environment creation, frozen installation, dependency check, and tokenizer verification |
 
-The locked runtime includes Python 3.11, JAX 0.5.3, Flax 0.10.2, Orbax Checkpoint 0.11.13, NumPy 1.x, PyTorch 2.7.1, Transformers 4.53.2, and the pinned LeRobot revision. The repository does not require Docker.
+The installer selects Python 3.11. The locked runtime includes JAX 0.5.3, Flax 0.10.2, Orbax Checkpoint 0.11.13, NumPy 1.x, PyTorch 2.7.1, Transformers 4.53.2, and the pinned LeRobot revision. The repository does not require Docker.
 
-For an offline installation, provide a directory named runtime_wheels containing the Linux x86_64 / CPython 3.11 wheels listed by the lock manifest before running setup_runtime.sh. Wheel bundles are intentionally excluded from this Git repository.
+The optional offline installer requires BOTH runtime_wheels/ and a matching runtime-wheel-manifest.json with filenames and SHA256 hashes. Neither is distributed in this Git repository; use setup_runtime.sh for the normal online frozen installation. A requirements-only installation is not a replacement for installing the OpenPI workspace.
 
 ## 3. Checkpoint layout and model names
 
@@ -123,6 +135,25 @@ The submitted model directory should be named exactly after the task. For exampl
 
 No checkpoint is included in this repository.
 
+Normalization statistics are always loaded from the selected checkpoint, without renaming or copying assets:
+
+1. If PI05_NORM_ASSET_ID is set, load assets/<PI05_NORM_ASSET_ID>/norm_stats.json from this checkpoint. A missing explicit selection is an error.
+2. Otherwise, if the training configuration's asset name exists under this checkpoint, use that file.
+3. If it does not exist and exactly one assets/*/norm_stats.json exists in this checkpoint, load that file.
+4. If several alternatives exist, stop with an error listing their asset IDs; specify the correct one explicitly.
+
+No normalization statistics are read from the policy source tree, the simulator environment, or any other checkpoint.
+
+For drawer_open_place, a checkpoint containing only assets/robosyn_robotwin_piper_sf/norm_stats.json is therefore detected automatically. To select it explicitly (for example when the checkpoint includes multiple statistics files):
+
+~~~bash
+PI05_NORM_ASSET_ID=robosyn_robotwin_piper_sf \\
+  bash "$PI05_ROOT/eval.sh" drawer_open_place random \\
+  "$MODEL_ROOT/drawer_open_place" 0 --max_episodes 20 --headless true
+~~~
+
+The selected statistics path is logged before model restoration. This changes only checkpoint asset lookup; it does not change training/model configuration, action transforms or checkpoint contents. The default configuration is pi05_robosyn_robotwin_piper_jax_full; set PI05_TRAIN_CONFIG only if the submitted checkpoint uses a different compatible training configuration.
+
 ## 4. Evaluation command format
 
 The policy launcher accepts:
@@ -133,12 +164,13 @@ bash "$PI05_ROOT/eval.sh" \
   --max_episodes 20 --headless true
 ~~~
 
-Set ROBOSYN_ROOT before calling eval.sh when the policy repository is outside the official checkout:
+From the deployment layout above, set the policy path and activate or select the official simulator environment:
 
-~~~
-export ROBOSYN_ROOT=/path/to/RoboSynChallenge
-export PI05_ROOT=/path/to/pi05_v2
-source "$ROBOSYN_ROOT/deployment/local-env.sh"
+~~~bash
+export ROBOSYN_ROOT=/path/to/RoboSynChallenge_ws/RoboSynChallenge
+export PI05_ROOT="$ROBOSYN_ROOT/policy/pi05_v2"
+# Optional if a suitable simulator environment is already activated/detected:
+export PYTHON_BIN=/path/to/simulator-environment/bin/python
 ~~~
 
 gpu_id is a physical GPU index. The launcher leaves the simulator unmasked and passes the selected physical index to the PI0.5 worker. The worker always uses PI05_ROOT/.venv unless PI05_PYTHON is explicitly supplied.

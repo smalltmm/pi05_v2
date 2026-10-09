@@ -1,6 +1,7 @@
 """Dependency-isolated inference worker for a JAX OpenPI PI05 checkpoint."""
 from __future__ import annotations
-import argparse, json, logging, sys, time, traceback
+import argparse, json, logging, os, sys, time, traceback
+from checkpoint_assets import resolve_norm_stats
 from pathlib import Path
 import numpy as np
 
@@ -14,8 +15,14 @@ def load(a):
  imports(Path(a.openpi_root).resolve())
  from openpi.policies import policy_config
  from openpi.training import config as training_config
+ from openpi.training import checkpoints
  config=training_config.get_config(a.train_config_name)
- return policy_config.create_trained_policy(config,Path(a.checkpoint_path).resolve(),sample_kwargs={'num_steps':a.num_inference_steps})
+ checkpoint=Path(a.checkpoint_path).resolve()
+ data_config=config.data.create(config.assets_dirs,config.model)
+ norm_file=resolve_norm_stats(checkpoint,data_config.asset_id,os.environ.get('PI05_NORM_ASSET_ID'))
+ logging.info("Checkpoint normalization statistics: %s",norm_file)
+ norm_stats=checkpoints.load_norm_stats(norm_file.parent.parent,norm_file.parent.name)
+ return policy_config.create_trained_policy(config,checkpoint,norm_stats=norm_stats,sample_kwargs={'num_steps':a.num_inference_steps})
 def load_obs(path):
  with np.load(path,allow_pickle=False) as d:
   return {'state':np.asarray(d['observation/state'],dtype=np.float32),'images':{'cam_high':np.moveaxis(np.asarray(d['observation/image']),-1,0),'cam_left_wrist':np.moveaxis(np.asarray(d['observation/left_wrist_image']),-1,0),'cam_right_wrist':np.moveaxis(np.asarray(d['observation/right_wrist_image']),-1,0)},'prompt':str(d['prompt'].item())}

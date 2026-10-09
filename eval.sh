@@ -15,8 +15,6 @@ REPO_ROOT="${ROBOSYN_ROOT:-$(cd "$SCRIPT_DIR/../.." && pwd)}"
 REPO_ROOT="$(cd -- "$REPO_ROOT" && pwd)"
 WORKSPACE_ROOT="$(cd "$REPO_ROOT/.." && pwd)"
 EMBODICHAIN_ROOT="${EMBODICHAIN_ROOT:-$WORKSPACE_ROOT/EmbodiChain}"
-VENV_DIR="${ROBOSYN_VENV_DIR:-$WORKSPACE_ROOT/.venv}"
-PYTHON_BIN="${PYTHON_BIN:-$VENV_DIR/bin/python}"
 OPENPI_ROOT="${OPENPI_ROOT:-$SCRIPT_DIR}"
 
 POLICY_NAME=pi05_v2
@@ -67,10 +65,46 @@ resolve_python() {
     [[ -x "$executable" ]] || return 1
     printf '%s/%s\n' "$(cd -- "$(dirname -- "$executable")" && pwd)" "$(basename -- "$executable")"
 }
-if ! PYTHON_BIN="$(resolve_python "$PYTHON_BIN")"; then
-    echo "Error: RoboSyn interpreter unavailable; set PYTHON_BIN or ROBOSYN_VENV_DIR." >&2
+# Explicit interpreter selections take precedence and fail without falling back.
+# Automatic discovery checks package availability without importing CUDA libraries.
+sim_python_available() {
+    "$1" -c 'import importlib.util, sys; sys.exit(not all(importlib.util.find_spec(m) is not None for m in ("embodichain", "dexsim", "robosynchallenge", "torch")))' >/dev/null 2>&1
+}
+select_sim_python() {
+    local candidate resolved
+    if [[ -n "${PYTHON_BIN:-}" || -n "${ROBOSYN_VENV_DIR:-}" ]]; then
+        candidate="${PYTHON_BIN:-${ROBOSYN_VENV_DIR}/bin/python}"
+        resolved="$(resolve_python "$candidate")" || {
+            echo "Error: selected simulator Python is not executable: $candidate" >&2
+            return 1
+        }
+        sim_python_available "$resolved" || {
+            echo "Error: $resolved cannot locate embodichain, dexsim, robosynchallenge and torch. Install the official simulator dependencies in this environment." >&2
+            return 1
+        }
+        printf '%s\n' "$resolved"
+        return 0
+    fi
+    local candidates=()
+    [[ -z "${VIRTUAL_ENV:-}" ]] || candidates+=("$VIRTUAL_ENV/bin/python")
+    [[ -z "${CONDA_PREFIX:-}" ]] || candidates+=("$CONDA_PREFIX/bin/python")
+    candidates+=("$EMBODICHAIN_ROOT/.venv/bin/python" "$REPO_ROOT/.venv/bin/python"
+                 "$WORKSPACE_ROOT/.venv/bin/python" python python3)
+    for candidate in "${candidates[@]}"; do
+        resolved="$(resolve_python "$candidate")" || continue
+        if sim_python_available "$resolved"; then
+            printf '%s\n' "$resolved"
+            return 0
+        fi
+    done
+    echo "Error: no simulator Python found. Activate the official simulator environment, or set PYTHON_BIN / ROBOSYN_VENV_DIR." >&2
+    return 1
+}
+if [[ ! -f "$REPO_ROOT/scripts/eval_policy.py" ]]; then
+    echo "Error: RoboSynChallenge not found at $REPO_ROOT; place pi05_v2 under RoboSynChallenge/policy or set ROBOSYN_ROOT." >&2
     exit 1
 fi
+PYTHON_BIN="$(select_sim_python)"
 if ! PI05_PYTHON="$(resolve_python "$PI05_PYTHON")"; then
     echo "Error: policy interpreter unavailable; create pi05_v2/.venv or set PI05_PYTHON." >&2
     exit 1
