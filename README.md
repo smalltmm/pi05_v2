@@ -119,7 +119,7 @@ uv pip check --python "$PI05_PYTHON"
 
 `pyproject.toml` 与 `uv.lock` 锁定本 policy 的依赖，使用 Python 3.11、JAX 0.5.3（CUDA 12）、PyTorch 2.7.1。`requirements.txt` 引用 `runtime-requirements.txt`（从 lock 导出的第三方依赖，不含本地 OpenPI/workspace 包），完整安装请使用上面的 `uv sync`。本流程无需安装训练数据集或 `rlds` 依赖组。
 
-**无需再次 `source pi05_v2/.venv/bin/activate`。** 保留仿真环境，`eval.sh` 会通过 `PI05_PYTHON` 自动启动独立的推理进程。Docker 内的 PI05 环境也应在容器内安装。
+** `eval.sh` 会通过 `PI05_PYTHON` 自动启动独立的推理进程。Docker 内的 PI05 环境也应在容器内安装。
 
 ## 5. 下载 checkpoint
 
@@ -156,7 +156,7 @@ checkpoints/pi05_v2/
 └── ...其余 8 个任务同样结构
 ```
 
-归一化统计始终从**当前 checkpoint** 的 `assets/*/norm_stats.json` 加载。`<asset_id>` 保留模型原目录名，无需将 `robosyn_robotwin_piper_sf` 改名。
+归一化统计始终从**当前 checkpoint** 的 `assets/*/norm_stats.json` 加载。
 
 ## 6. 完整评测命令
 
