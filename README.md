@@ -26,7 +26,21 @@ git -C "$POLICY_DOWNLOAD_DIR" archive HEAD | tar -x -C "$POLICY_ROOT"
 
 ## 2. 安装仿真器环境
 
-已按[官方安装说明](https://edem-ai.github.io/RoboSynChallenge/html/getting_started/installation.html)安装的环境可跳过本节。官方版本为 EmbodiChain `v0.2.4.post1`；Docker 安装按官方说明使用 `dexforce/embodichain:ubuntu22.04-cuda12.8`，工作区挂载到 `/root/workspace`。
+已按[官方安装说明](https://edem-ai.github.io/RoboSynChallenge/html/getting_started/installation.html)安装的环境可跳过本节。官方版本为 `v0.2.4.post1`。
+
+Docker 安装需要宿主机已安装 Docker、NVIDIA Container Toolkit 和 NVIDIA 驱动（官方要求驱动版本至少为 535）。按官方脚本创建容器：
+
+```bash
+export ROBOSYN_WS=/path/to/RoboSynChallenge_ws
+mkdir -p "$ROBOSYN_WS"
+docker pull dexforce/embodichain:ubuntu22.04-cuda12.8
+git clone https://github.com/DexForce/EmbodiChain.git "$ROBOSYN_WS/EmbodiChain"
+cd "$ROBOSYN_WS/EmbodiChain"
+git checkout tags/v0.2.4.post1
+./docker/docker_run.sh robosyn "$ROBOSYN_WS"
+```
+
+该脚本会将宿主机工作区挂载到容器内的 `/root/workspace`。若已创建过容器，后续只需执行第 3 节的 `docker start` 和 `docker exec`。无 Docker 权限时使用下面的本地安装方式。
 
 以下为本地安装（Linux，已配置 NVIDIA 驱动及官方要求的渲染依赖）：
 
