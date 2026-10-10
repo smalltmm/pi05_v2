@@ -27,3 +27,10 @@ pi05_num_inference_steps: 10
 pi05_cuda_visible_devices: ""
 strict_action_dim: true
 pi05_debug_actions: false
+# Suppress isolated one-frame gripper flips after PI0.5 action inference.
+pi05_gripper_filter: true
+pi05_gripper_filter_task: drawer_open_place
+pi05_gripper_filter_indices: "6"  # left gripper only; right gripper is unfiltered
+pi05_gripper_filter_window: 5
+pi05_gripper_filter_confirm_steps: 2
+pi05_gripper_filter_threshold: 0.5

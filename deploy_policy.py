@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import atexit
+from collections import deque
 import json
 import os
 import subprocess
@@ -46,6 +47,81 @@ def _scalar_bool(value: Any) -> bool:
     array = _to_numpy(value).reshape(-1)
     return bool(array.size and array[0])
 
+
+
+class GripperTemporalFilter:
+    """Suppress isolated gripper flips while preserving real transitions.
+
+    RoboSynChallenge uses action indices 6 and 13 for the left and right
+    grippers respectively. The policy action convention is 0=open, 1=closed.
+    A short median window removes one-frame spikes; a two-frame confirmation
+    prevents a single opposite command from changing the held state.
+    """
+
+    def __init__(
+        self,
+        indices: tuple[int, ...] = (6, 13),
+        window: int = 5,
+        confirm_steps: int = 2,
+        threshold: float = 0.5,
+    ) -> None:
+        if window < 1 or window % 2 == 0:
+            raise ValueError("gripper filter window must be a positive odd number")
+        if confirm_steps < 1:
+            raise ValueError("gripper filter confirm_steps must be positive")
+        self.indices = tuple(int(i) for i in indices)
+        self.window = int(window)
+        self.confirm_steps = int(confirm_steps)
+        self.threshold = float(threshold)
+        self.reset()
+
+    def reset(self) -> None:
+        self._history = {i: deque(maxlen=self.window) for i in self.indices}
+        self._state: dict[int, int] = {}
+        self._pending_state: dict[int, int] = {}
+        self._pending_count: dict[int, int] = {}
+        self._last_output: dict[int, float] = {}
+
+    def apply(self, actions: np.ndarray) -> np.ndarray:
+        filtered = np.asarray(actions, dtype=np.float32).copy()
+        if filtered.ndim != 2:
+            raise ValueError(f"Expected [time, action_dim], got {filtered.shape}")
+        for row in range(filtered.shape[0]):
+            for index in self.indices:
+                if index >= filtered.shape[1]:
+                    continue
+                raw = float(filtered[row, index])
+                if not np.isfinite(raw):
+                    continue
+                history = self._history[index]
+                history.append(raw)
+                median_value = float(np.median(np.asarray(history, dtype=np.float32)))
+                candidate = int(median_value >= self.threshold)
+                state = self._state.get(index)
+                if state is None:
+                    state = candidate
+                    self._state[index] = state
+                if candidate != state:
+                    if self._pending_state.get(index) == candidate:
+                        self._pending_count[index] += 1
+                    else:
+                        self._pending_state[index] = candidate
+                        self._pending_count[index] = 1
+                    if self._pending_count[index] >= self.confirm_steps:
+                        state = candidate
+                        self._state[index] = state
+                        self._pending_state.pop(index, None)
+                        self._pending_count.pop(index, None)
+                else:
+                    self._pending_state.pop(index, None)
+                    self._pending_count.pop(index, None)
+                if candidate != state:
+                    value = self._last_output.get(index, float(state))
+                else:
+                    value = median_value
+                filtered[row, index] = value
+                self._last_output[index] = value
+        return filtered
 
 def _extract_image(obs: dict, sensor_name: str) -> np.ndarray:
     image = _first_env(obs["sensor"][sensor_name]["color"])
@@ -137,7 +213,29 @@ class PI05JaxWorkerClient:
         self.compile_mode = str(usr_args.get("pi05_compile_mode", "none"))
         self.strict_action_dim = _as_bool(usr_args.get("strict_action_dim", True))
         self.debug_actions = _as_bool(usr_args.get("pi05_debug_actions", False))
-        self.task_name = str(usr_args.get("task_name", "click_bell"))
+        self.task_name = str(usr_args.get("task_name") or "")
+        filter_task = str(usr_args.get("pi05_gripper_filter_task", "drawer_open_place"))
+        self.gripper_filter_enabled = (
+            _as_bool(usr_args.get("pi05_gripper_filter", True))
+            and self.task_name == filter_task
+        )
+        raw_gripper_indices = usr_args.get("pi05_gripper_filter_indices", "6,13")
+        if isinstance(raw_gripper_indices, str):
+            gripper_indices = tuple(
+                int(part.strip()) for part in raw_gripper_indices.split(",") if part.strip()
+            )
+        else:
+            gripper_indices = tuple(int(index) for index in raw_gripper_indices)
+        self.gripper_filter = (
+            GripperTemporalFilter(
+                indices=gripper_indices,
+                window=int(usr_args.get("pi05_gripper_filter_window", 5)),
+                confirm_steps=int(usr_args.get("pi05_gripper_filter_confirm_steps", 2)),
+                threshold=float(usr_args.get("pi05_gripper_filter_threshold", 0.5)),
+            )
+            if self.gripper_filter_enabled
+            else None
+        )
         worker_gpu = usr_args.get("pi05_cuda_visible_devices")
         if worker_gpu is None or str(worker_gpu).strip() == "":
             worker_gpu = usr_args.get("gpu_id", 0)
@@ -256,6 +354,8 @@ class PI05JaxWorkerClient:
                 f"Expected a [time, action_dim] action chunk, got {actions.shape}."
             )
         actions = actions[: self.exec_steps]
+        if self.gripper_filter is not None:
+            actions = self.gripper_filter.apply(actions)
         if self.debug_actions and actions.size:
             print(
                 "[PI0.5 action debug] "
@@ -266,6 +366,8 @@ class PI05JaxWorkerClient:
         return actions
 
     def reset(self) -> None:
+        if self.gripper_filter is not None:
+            self.gripper_filter.reset()
         self._rpc({"cmd": "reset"})
 
     def close(self) -> None:

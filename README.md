@@ -194,3 +194,26 @@ $ROBOSYN_ROOT/eval_result/<任务名>/pi05_v2/random/<train_config>/<model_name>
 ```
 
 `evaluation_metrics.json` 包含成功率、各轮 seed、动作步数和推理耗时；`videos/` 保存各轮视频。默认配置开启专家可行性筛选，筛除的 seed 也会记录在指标中。
+
+
+## Gripper temporal filtering (local evaluation change)
+
+The deployment adapter filters selected gripper action indices after checkpoint
+normalization has been undone. The current evaluation configuration enables this only for `drawer_open_place`
+and selects action index 6 (left gripper); action index 13 (right gripper) is
+unfiltered. All other tasks disable the filter. It uses a causal 5-sample median and requires
+two consecutive median outputs on the other side of 0.5 before changing state.
+Continuous values are retained; arm joint commands are unchanged.
+History spans executed chunks and is cleared by `reset_model` each episode.
+The default execution length remains 25 steps of each model prediction.
+For sustained binary transitions with a full history, the delay is 3 control
+steps (about 0.12 seconds at 25 Hz). This may affect grasp/release timing.
+This filter is not a guarantee against sustained incorrect opening predictions.
+
+Options in `deploy_policy.yml`:
+- `pi05_gripper_filter: true` (the task gate still limits it to `drawer_open_place`)
+- `pi05_gripper_filter_task: drawer_open_place`
+- `pi05_gripper_filter_indices: "6"` (left gripper only; use `"6,13"` for both)
+- `pi05_gripper_filter_window: 5`
+- `pi05_gripper_filter_confirm_steps: 2`
+- `pi05_gripper_filter_threshold: 0.5`
