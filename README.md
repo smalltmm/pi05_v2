@@ -64,12 +64,13 @@ export ROBOSYN_ROOT="/path/to/RoboSynChallenge_ws/RoboSynChallenge"
 export POLICY_ROOT="$ROBOSYN_ROOT/policy/pi05_v2"
 ```
 
-直接将本仓库克隆到官方项目的 `policy/` 目录：
+先克隆到临时目录，再把仓库中的 `policy/pi05_v2/` 复制到官方项目的 adapter 目录，避免生成嵌套路径：
 
 ```bash
-cd "$ROBOSYN_ROOT/policy"
-
-git clone https://github.com/smalltmm/pi05_v2.git
+POLICY_DOWNLOAD_DIR="$(mktemp -d)"
+git clone https://github.com/smalltmm/pi05_v2.git "$POLICY_DOWNLOAD_DIR"
+mkdir -p "$POLICY_ROOT"
+cp -a "$POLICY_DOWNLOAD_DIR/policy/pi05_v2/." "$POLICY_ROOT/"
 ```
 
 完成后 Policy 路径为：
