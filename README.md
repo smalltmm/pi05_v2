@@ -1,219 +1,260 @@
-# PI0.5 v2 评测
+# PI0.5 v2 — RoboSynChallenge 评测部署
 
-本仓库包含 PI05_v2 policy 和锁定的依赖，不包含 Python 环境或 checkpoint。代码部署到 `RoboSynChallenge/policy/pi05_v2`。
+本仓库提供 **PI0.5 v2（JAX）Policy** 的推理代码、部署配置、评测脚本和依赖锁定文件。本次提交覆盖 **RoboSynChallenge 全部 10 个任务**，每个任务使用与任务同名的 checkpoint。
 
-## 1. 获取 policy
+- **Policy 代码：** https://github.com/smalltmm/pi05_v2
+- **模型权重：** https://huggingface.co/wxhtmo/robosyn_model_v1
+- **官方 RoboSynChallenge：** https://github.com/EDEM-AI/RoboSynChallenge
+- **本地评测配置：** `random`、每任务 20 episodes、`seed=0`
 
-先准备官方 RoboSynChallenge 代码；已有工作区可跳过克隆官方仓库。将下方路径替换为实际位置：
+**部署前提：** 评测服务器已安装并配置好官方 RoboSynChallenge 仿真环境（本提交使用 EmbodiChain `v0.2.4.post1`）。以下仅说明本 Policy 的模型下载、代码放置、推理环境与评测方法，不包含官方仿真环境的安装步骤。
 
-```bash
-export ROBOSYN_WS=/path/to/RoboSynChallenge_ws
-export ROBOSYN_ROOT="$ROBOSYN_WS/RoboSynChallenge"
-export POLICY_ROOT="$ROBOSYN_ROOT/policy/pi05_v2"
-mkdir -p "$ROBOSYN_WS"
-# 仅首次获取官方代码时执行：
-git clone https://github.com/EDEM-AI/RoboSynChallenge.git "$ROBOSYN_ROOT"
-```
+## 1. 下载模型 Checkpoints
 
-为避免嵌套 Git 仓库，先克隆 policy 到临时目录，再导出到 `policy/pi05_v2`：
+模型仓库：https://huggingface.co/wxhtmo/robosyn_model_v1
 
-```bash
-POLICY_DOWNLOAD_DIR="$(mktemp -d)"
-git clone https://github.com/smalltmm/pi05_v2.git "$POLICY_DOWNLOAD_DIR"
-mkdir -p "$POLICY_ROOT"
-git -C "$POLICY_DOWNLOAD_DIR" archive HEAD | tar -x -C "$POLICY_ROOT"
-```
+仓库采用 **Public + Gated Access**：仓库页面公开，但下载 checkpoint 需要访问授权。评测人员应使用**RoboSynChallenge** Hugging Face 账号认证；
 
-## 2. 安装仿真器环境
+### 1.1 登录并下载
 
-已按[官方安装说明](https://edem-ai.github.io/RoboSynChallenge/html/getting_started/installation.html)安装的环境可跳过本节。官方版本为 `v0.2.4.post1`。
-
-Docker 安装需要宿主机已安装 Docker、NVIDIA Container Toolkit 和 NVIDIA 驱动（官方要求驱动版本至少为 535）。按官方脚本创建容器：
+请先确保系统已安装 Hugging Face CLI（`hf`），随后执行：
 
 ```bash
-export ROBOSYN_WS=/path/to/RoboSynChallenge_ws
-mkdir -p "$ROBOSYN_WS"
-docker pull dexforce/embodichain:ubuntu22.04-cuda12.8
-git clone https://github.com/DexForce/EmbodiChain.git "$ROBOSYN_WS/EmbodiChain"
-cd "$ROBOSYN_WS/EmbodiChain"
-git checkout tags/v0.2.4.post1
-./docker/docker_run.sh robosyn "$ROBOSYN_WS"
+hf auth login
+
+export HF_REPO_ID="wxhtmo/robosyn_model_v1"
+export MODEL_ROOT="/path/to/model_root"
+
+hf download "$HF_REPO_ID" \
+    --repo-type model \
+    --local-dir "$MODEL_ROOT"
 ```
 
-该脚本会将宿主机工作区挂载到容器内的 `/root/workspace`。若已创建过容器，后续只需执行第 3 节的 `docker start` 和 `docker exec`。无 Docker 权限时使用下面的本地安装方式。
+`MODEL_ROOT` 是模型保存目录，请替换为评测服务器上的实际路径。`hf download` 将按仓库原有结构下载全部 10 个任务的 checkpoint。
 
-以下为本地安装（Linux，已配置 NVIDIA 驱动及官方要求的渲染依赖）：
+### 1.2 Checkpoint 目录结构
 
-```bash
-# 已有 uv 时跳过这两行
-curl -LsSf https://astral.sh/uv/install.sh | sh
-export PATH="$HOME/.local/bin:$PATH"
-
-cd "$ROBOSYN_WS"
-git clone https://github.com/DexForce/EmbodiChain.git
-cd EmbodiChain
-git checkout tags/v0.2.4.post1
-uv venv --python 3.11 .venv
-source .venv/bin/activate
-uv pip install -e . \
-  --extra-index-url http://pyp.open3dv.site:2345/simple/ \
-  --trusted-host pyp.open3dv.site
-uv pip install -e "$ROBOSYN_ROOT"
-```
-
-## 3. 激活官方仿真器环境
-
-以下两种方式选一种。这里只选择仿真器使用的 Python，评测时 `eval.sh` 会启动仿真器。
-
-### 3.1 Docker 安装
-
-在宿主机启动并进入按官方教程创建的容器（名称替换为实际值）：
-
-```bash
-export CONTAINER_NAME=robosyn
-docker start "$CONTAINER_NAME"
-docker exec -it "$CONTAINER_NAME" bash
-```
-
-进入容器后执行；第 4–7 节也在同一容器内执行：
-
-```bash
-conda activate robosyn
-export ROBOSYN_WS=/root/workspace
-export ROBOSYN_ROOT="$ROBOSYN_WS/RoboSynChallenge"
-export POLICY_ROOT="$ROBOSYN_ROOT/policy/pi05_v2"
-export PYTHON_BIN="$(command -v python)"
-"$PYTHON_BIN" -c "import embodichain, dexsim, robosynchallenge; print('simulator ok')"
-```
-
-### 3.2 本地安装
-
-```bash
-export ROBOSYN_WS=/path/to/RoboSynChallenge_ws
-export ROBOSYN_ROOT="$ROBOSYN_WS/RoboSynChallenge"
-export POLICY_ROOT="$ROBOSYN_ROOT/policy/pi05_v2"
-export SIM_ENV="$ROBOSYN_WS/EmbodiChain/.venv"  # 改为实际仿真环境目录
-source "$SIM_ENV/bin/activate"
-export PYTHON_BIN="$(command -v python)"
-"$PYTHON_BIN" -c "import embodichain, dexsim, robosynchallenge; print('simulator ok')"
-```
-
-若已激活其他位置的官方环境，只需设置 `PYTHON_BIN="$(command -v python)"` 并运行上述导入检查，无需固定为 `EmbodiChain/.venv`。
-
-## 4. 安装 PI0.5 推理环境
-
-确认 `uv` 可用后执行。Docker 中若未安装 uv，先执行第 2 节的 uv 安装命令。
-
-```bash
-cd "$POLICY_ROOT"
-(
-  unset VIRTUAL_ENV CONDA_PREFIX
-  export UV_PROJECT_ENVIRONMENT="$POLICY_ROOT/.venv"
-  export GIT_LFS_SKIP_SMUDGE=1
-  uv sync --frozen --no-dev --python 3.11
-)
-export PI05_PYTHON="$POLICY_ROOT/.venv/bin/python"
-uv pip check --python "$PI05_PYTHON"
-"$PI05_PYTHON" -c "import jax, openpi; print('jax', jax.__version__)"
-```
-
-`pyproject.toml` 与 `uv.lock` 锁定本 policy 的依赖，使用 Python 3.11、JAX 0.5.3（CUDA 12）、PyTorch 2.7.1。`requirements.txt` 引用 `runtime-requirements.txt`（从 lock 导出的第三方依赖，不含本地 OpenPI/workspace 包），完整安装请使用上面的 `uv sync`。本流程无需安装训练数据集或 `rlds` 依赖组。
-
-** `eval.sh` 会通过 `PI05_PYTHON` 自动启动独立的推理进程。Docker 内的 PI05 环境也应在容器内安装。
-
-## 5. 下载 checkpoint
-
-模型仓库链接及只读 token 见提交页面。一个 Hugging Face 模型仓库包含 10 个同名任务目录。按提示输入仓库 ID（网址中 `huggingface.co/` 后的 `用户名/仓库名`）和 token；token 不回显、不写入 README。
-
-```bash
-export MODEL_ROOT="$ROBOSYN_WS/checkpoints/pi05_v2"
-mkdir -p "$MODEL_ROOT"
-read -r -p "Hugging Face 仓库 ID（用户名/仓库名）: " HF_REPO_ID
-export HF_REPO_ID
-"$PI05_PYTHON" - <<'PY'
-import getpass
-import os
-from huggingface_hub import snapshot_download
-
-snapshot_download(
-    repo_id=os.environ["HF_REPO_ID"],
-    local_dir=os.environ["MODEL_ROOT"],
-    token=getpass.getpass("Hugging Face 只读 token（公开仓库可留空）: ") or False,
-)
-PY
-```
-
-下载后目录结构应为（不要在任务目录下再套一层 checkpoint 目录）：
+下载后应保留如下目录结构：
 
 ```text
-checkpoints/pi05_v2/
+/path/to/model_root/
 ├── click_bell/
 │   ├── params/
-│   └── assets/<asset_id>/norm_stats.json
+│   └── assets/
+│       └── <asset_id>/norm_stats.json
+├── handle_basket/
+├── water_pouring/
+├── table_rearrangement/
+├── items_handover/
 ├── drawer_open_place/
-│   ├── params/
-│   └── assets/<asset_id>/norm_stats.json
-└── ...其余 8 个任务同样结构
+├── mixer_operating/
+├── item_assembly/
+├── manipulate_pipette/
+└── sample_loading/
 ```
 
-归一化统计始终从**当前 checkpoint** 的 `assets/*/norm_stats.json` 加载。
+其余各任务目录同样包含 `params/` 和 `assets/<asset_id>/norm_stats.json`。请勿修改目录层级，也不要在任务目录下再次嵌套 checkpoint 文件夹。推理时归一化统计从**当前任务的 checkpoint** 中加载。
 
-## 6. 完整评测命令
+## 2. 获取 Policy 代码
 
-新终端先执行第 3 节，选择 Docker 或本地仿真环境，再执行以下命令。两个环境的 Python 都在此明确指定；PI05 推理进程由评测脚本自动启动。
+首先确保官方 RoboSynChallenge 仓库已存在于评测工作区。以下目录均为示例，按实际位置替换：
 
 ```bash
-cd "$ROBOSYN_ROOT"
-export PYTHON_BIN="$(command -v python)"  # 当前已激活的官方仿真环境
-export PI05_PYTHON="$POLICY_ROOT/.venv/bin/python"
-export MODEL_ROOT="$ROBOSYN_WS/checkpoints/pi05_v2"
-export GPU_ID=0  # 改为空闲 GPU 编号；Docker 使用容器内可见编号
-
-bash "$POLICY_ROOT/eval.sh" click_bell          random "$MODEL_ROOT/click_bell"          "$GPU_ID" --max_episodes 20 --headless true --seed 0
-bash "$POLICY_ROOT/eval.sh" handle_basket       random "$MODEL_ROOT/handle_basket"       "$GPU_ID" --max_episodes 20 --headless true --seed 0
-bash "$POLICY_ROOT/eval.sh" water_pouring       random "$MODEL_ROOT/water_pouring"       "$GPU_ID" --max_episodes 20 --headless true --seed 0
-bash "$POLICY_ROOT/eval.sh" table_rearrangement random "$MODEL_ROOT/table_rearrangement" "$GPU_ID" --max_episodes 20 --headless true --seed 0
-bash "$POLICY_ROOT/eval.sh" items_handover      random "$MODEL_ROOT/items_handover"      "$GPU_ID" --max_episodes 20 --headless true --seed 0
-bash "$POLICY_ROOT/eval.sh" drawer_open_place   random "$MODEL_ROOT/drawer_open_place"   "$GPU_ID" --max_episodes 20 --headless true --seed 0
-bash "$POLICY_ROOT/eval.sh" mixer_operating     random "$MODEL_ROOT/mixer_operating"     "$GPU_ID" --max_episodes 20 --headless true --seed 0
-bash "$POLICY_ROOT/eval.sh" item_assembly       random "$MODEL_ROOT/item_assembly"       "$GPU_ID" --max_episodes 20 --headless true --seed 0
-bash "$POLICY_ROOT/eval.sh" manipulate_pipette random "$MODEL_ROOT/manipulate_pipette"   "$GPU_ID" --max_episodes 20 --headless true --seed 0
-bash "$POLICY_ROOT/eval.sh" sample_loading     random "$MODEL_ROOT/sample_loading"      "$GPU_ID" --max_episodes 20 --headless true --seed 0
+export ROBOSYN_ROOT="/path/to/RoboSynChallenge_ws/RoboSynChallenge"
+export POLICY_ROOT="$ROBOSYN_ROOT/policy/pi05_v2"
 ```
 
-可单独执行某一行；全部执行时依次评测 10 个任务。每个任务使用对应目录中的 checkpoint。`eval.sh` 自动设置 `EMBODICHAIN_SIM_EXIT_PROCESS=0` 以完成指标保存。首次运行会加载权重并进行 JAX 编译，请等待日志出现 worker ready 和 episode 进度。
+直接将本仓库克隆到官方项目的 `policy/` 目录：
 
-## 7. 评测输出
+```bash
+cd "$ROBOSYN_ROOT/policy"
 
-终端打印每轮结果、最终成功率和指标路径。结果保存在：
+git clone https://github.com/smalltmm/pi05_v2.git
+```
+
+完成后 Policy 路径为：
 
 ```text
-$ROBOSYN_ROOT/eval_result/<任务名>/pi05_v2/random/<train_config>/<model_name>/<时间戳>/
-├── evaluation_metrics.json
-└── videos/
+/path/to/RoboSynChallenge_ws/RoboSynChallenge/policy/pi05_v2/
+├── deploy_policy.py
+├── deploy_policy.yml
+├── eval.sh
+├── pyproject.toml
+├── uv.lock
+├── src/openpi/
+└── ...
 ```
 
-`evaluation_metrics.json` 包含成功率、各轮 seed、动作步数和推理耗时；`videos/` 保存各轮视频。默认配置开启专家可行性筛选，筛除的 seed 也会记录在指标中。
 
+## 3. 安装 PI0.5 推理环境（uv）
 
-## Gripper temporal filtering (local evaluation change)
+**请先激活官方 RoboSynChallenge 仿真环境，这里以本地安装好的RoboSynChallenge 仿真环境为例。**
 
-The deployment adapter filters selected gripper action indices after checkpoint
-normalization has been undone. The current evaluation configuration enables this only for `drawer_open_place`
-and selects action index 6 (left gripper); action index 13 (right gripper) is
-unfiltered. All other tasks disable the filter. It uses a causal 5-sample median and requires
-two consecutive median outputs on the other side of 0.5 before changing state.
-Continuous values are retained; arm joint commands are unchanged.
-History spans executed chunks and is cleared by `reset_model` each episode.
-The default execution length remains 25 steps of each model prediction.
-For sustained binary transitions with a full history, the delay is 3 control
-steps (about 0.12 seconds at 25 Hz). This may affect grasp/release timing.
-This filter is not a guarantee against sustained incorrect opening predictions.
+本 Policy 使用两个 Python 环境，**只需在独立推理环境中安装 OpenPI；官方仿真环境不需要额外安装 OpenPI**。
 
-Options in `deploy_policy.yml`:
-- `pi05_gripper_filter: true` (the task gate still limits it to `drawer_open_place`)
-- `pi05_gripper_filter_task: drawer_open_place`
-- `pi05_gripper_filter_indices: "6"` (left gripper only; use `"6,13"` for both)
-- `pi05_gripper_filter_window: 5`
-- `pi05_gripper_filter_confirm_steps: 2`
-- `pi05_gripper_filter_threshold: 0.5`
+| 环境 | Python 路径 | 用途 |
+|---|---|---|
+| 官方仿真环境 | `PYTHON_BIN` | 运行 EmbodiChain / RoboSynChallenge 仿真与 Policy Adapter |
+| PI0.5 独立环境 | `PI05_PYTHON` | 安装 OpenPI 及 JAX 依赖，加载 checkpoint 并运行推理 Worker |
+
+### 3.1 创建独立的 PI0.5 环境
+
+在**已激活官方仿真环境**的终端中执行：
+
+```bash
+export ROBOSYN_ROOT="/path/to/RoboSynChallenge_ws/RoboSynChallenge"
+export POLICY_ROOT="$ROBOSYN_ROOT/policy/pi05_v2"
+
+# 保存已激活的官方仿真 Python 路径
+export PYTHON_BIN="$(command -v python)"
+
+cd "$POLICY_ROOT"
+
+(
+    unset VIRTUAL_ENV CONDA_PREFIX
+    export UV_PROJECT_ENVIRONMENT="$POLICY_ROOT/.venv"
+    export GIT_LFS_SKIP_SMUDGE=1
+    uv sync --frozen --python 3.11
+)
+
+export PI05_PYTHON="$POLICY_ROOT/.venv/bin/python"
+```
+
+这一步使用项目的 `pyproject.toml` 和 `uv.lock` 安装独立 PI0.5 推理环境，路径为 `policy/pi05_v2/.venv`。Policy 使用 Python 3.11；依赖的具体版本以锁定文件为准。
+
+### 3.2 验证推理环境与进程分工
+
+检查OPENPI推理环境：
+
+```bash
+"$PI05_PYTHON" -c \
+"import jax, openpi; print('policy JAX:', jax.__version__)"
+```
+
+检查官方仿真环境：
+
+```bash
+"$PYTHON_BIN" -c \
+"import embodichain, dexsim, robosynchallenge; print('simulator OK')"
+```
+
+`eval.sh` 使用 `PYTHON_BIN` 启动仿真评测，使用 `PI05_PYTHON` 启动独立推理进程。
+
+注意：若在 Docker 内评测，PI0.5 的独立 `.venv` 也应在容器内创建，并确保两个解释器路径均可访问。
+
+## 4. 运行全部 10 个任务
+
+评测前**激活官方仿真环境**，并设置以下环境变量（按实际部署位置替换路径）：
+
+```bash
+export ROBOSYN_ROOT="/path/to/RoboSynChallenge_ws/RoboSynChallenge"
+
+export POLICY_ROOT="$ROBOSYN_ROOT/policy/pi05_v2"
+
+export PYTHON_BIN="$(command -v python)"
+
+export PI05_PYTHON="$POLICY_ROOT/.venv/bin/python"
+
+export MODEL_ROOT="/path/to/model_root"
+
+export GPU_ID=0
+
+cd "$ROBOSYN_ROOT"
+```
+
+其中：
+
+- `PYTHON_BIN`：已激活的官方仿真环境 Python。
+- `PI05_PYTHON`：独立 PI0.5 Policy 环境 Python。
+- `MODEL_ROOT`：包含全部 10 个任务 checkpoint 目录的根目录。
+- `GPU_ID`：推理使用的 GPU 编号，根据实际可用设备修改。Docker 环境使用容器内可见的 GPU 编号。
+
+### 4.1 评测命令
+
+本地评测命令格式：
+
+```bash
+bash "$POLICY_ROOT/eval.sh" <task_name> <setting> <checkpoint_path> <gpu_id> [extra_options...]
+```
+
+以下分别使用各任务对应的 checkpoint，采用 `random` 设置、每任务 20 episodes、无界面运行、随机种子 0。
+
+```bash
+# 1. click_bell
+bash "$POLICY_ROOT/eval.sh" click_bell random "$MODEL_ROOT/click_bell" "$GPU_ID" --max_episodes 20 --headless true --seed 0
+
+# 2. handle_basket
+bash "$POLICY_ROOT/eval.sh" handle_basket random "$MODEL_ROOT/handle_basket" "$GPU_ID" --max_episodes 20 --headless true --seed 0
+
+# 3. water_pouring
+bash "$POLICY_ROOT/eval.sh" water_pouring random "$MODEL_ROOT/water_pouring" "$GPU_ID" --max_episodes 20 --headless true --seed 0
+
+# 4. table_rearrangement
+bash "$POLICY_ROOT/eval.sh" table_rearrangement random "$MODEL_ROOT/table_rearrangement" "$GPU_ID" --max_episodes 20 --headless true --seed 0
+
+# 5. items_handover
+bash "$POLICY_ROOT/eval.sh" items_handover random "$MODEL_ROOT/items_handover" "$GPU_ID" --max_episodes 20 --headless true --seed 0
+
+# 6. drawer_open_place
+bash "$POLICY_ROOT/eval.sh" drawer_open_place random "$MODEL_ROOT/drawer_open_place" "$GPU_ID" --max_episodes 20 --headless true --seed 0
+
+# 7. mixer_operating
+bash "$POLICY_ROOT/eval.sh" mixer_operating random "$MODEL_ROOT/mixer_operating" "$GPU_ID" --max_episodes 20 --headless true --seed 0
+
+# 8. item_assembly
+bash "$POLICY_ROOT/eval.sh" item_assembly random "$MODEL_ROOT/item_assembly" "$GPU_ID" --max_episodes 20 --headless true --seed 0
+
+# 9. manipulate_pipette
+bash "$POLICY_ROOT/eval.sh" manipulate_pipette random "$MODEL_ROOT/manipulate_pipette" "$GPU_ID" --max_episodes 20 --headless true --seed 0
+
+# 10. sample_loading
+bash "$POLICY_ROOT/eval.sh" sample_loading random "$MODEL_ROOT/sample_loading" "$GPU_ID" --max_episodes 20 --headless true --seed 0
+```
+
+可以单独执行其中任意一行，也可以依次执行全部命令。
+
+每个任务使用 `MODEL_ROOT` 中与任务名称对应的 checkpoint。
+
+首次启动时需要恢复 checkpoint 并进行 JAX 编译，请等待推理 Worker 就绪后再开始评测。
+
+**说明：** 以上是本地复现所使用的评测参数，不代表官方 held-out 测试一定采用相同配置。主办方可以根据赛事评测协议调整场景、episode 数量和随机种子。
+
+### 4.2 模型与任务对应关系
+
+| Task | Checkpoint Path |
+|---|---|
+| click_bell | `$MODEL_ROOT/click_bell` |
+| handle_basket | `$MODEL_ROOT/handle_basket` |
+| water_pouring | `$MODEL_ROOT/water_pouring` |
+| table_rearrangement | `$MODEL_ROOT/table_rearrangement` |
+| items_handover | `$MODEL_ROOT/items_handover` |
+| drawer_open_place | `$MODEL_ROOT/drawer_open_place` |
+| mixer_operating | `$MODEL_ROOT/mixer_operating` |
+| item_assembly | `$MODEL_ROOT/item_assembly` |
+| manipulate_pipette | `$MODEL_ROOT/manipulate_pipette` |
+| sample_loading | `$MODEL_ROOT/sample_loading` |
+
+## 5. 评测结果
+
+评测程序会在终端报告各 episode 结果、最终成功率以及指标保存路径。
+
+典型结果目录如下，具体以实际日志为准：
+
+```text
+$ROBOSYN_ROOT/eval_result/
+└── <task_name>/
+    └── pi05_v2/
+        └── random/
+            └── <train_config>/
+                └── <model_name>/
+                    └── <timestamp>/
+                        ├── evaluation_metrics.json
+                        └── videos/
+```
+
+- `evaluation_metrics.json`：记录成功率、episode 信息、动作步数、推理耗时等评测指标。
+- `videos/`：保存评测过程视频，具体取决于评测配置。
+
+本仓库提供的 `eval.sh` 会设置 `EMBODICHAIN_SIM_EXIT_PROCESS=0`，以便在任务结束时保存评测指标。
+
+评测结果的实际保存路径以程序日志输出为准。
