@@ -17,3 +17,6 @@ runtime_wheels/
 runtime-packages.txt
 runtime-download-plan.json
 runtime-wheel-manifest.json
+
+# Local migration notes
+MIGRATION.md
