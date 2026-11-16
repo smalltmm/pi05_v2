@@ -316,7 +316,7 @@ def test_official_eval_stops_success_and_commits_exactly_executed_frames():
     model = plain_policy()
     obs, info, truncated, timings = deploy_policy.eval(env, model, env.obs())
     assert info["pi05_step_success"] and not truncated
-    assert env.count == model.runtime.steps == 2 and len(timings) == 1
+    assert env.count == model.runtime.steps == len(timings) == 2
 
 
 def test_official_eval_finishes_one_chunk_and_reinfers_next_call():

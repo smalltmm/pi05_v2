@@ -16,6 +16,8 @@ from typing import Any
 import numpy as np
 import torch
 
+from policy.inference_timing import finish_inference, start_inference
+
 
 _IMAGE_KEYS = {
     "observation/image": "cam_high",
@@ -542,11 +544,10 @@ def _eval_final(env, model, obs):
     timings = []
     starting_cycle = model.runtime.cycle
     while model.runtime.steps < 1000:
-        previous_cycle = model.runtime.cycle
+        infer_started = start_inference(env.unwrapped.device)
         action = model.next_action(encode_obs(final_obs), prompt)
-        if model.runtime.cycle != previous_cycle:
-            timings.append(model.last_inference_seconds)
         action_tensor = encode_action(action, env, strict_dim=model.strict_action_dim)
+        finish_inference(infer_started, timings, env.unwrapped.device)
         final_obs, _reward, terminated, truncated, info = env.step(action_tensor)
         model.commit_action()
         truncated_done = _scalar_bool(truncated)
