@@ -22,7 +22,7 @@
 ```bash
 hf auth login
 
-export HF_REPO_ID="wxhtmo/robosyn_model_v1"
+export HF_REPO_ID="wxhtmo/robosyn_model_v2"
 export MODEL_ROOT="/path/to/model_root"
 
 hf download "$HF_REPO_ID" \
