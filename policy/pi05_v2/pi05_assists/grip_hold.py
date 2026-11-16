@@ -442,7 +442,7 @@ def config_from_args(args):
     enabled = args.handover_assist if args.right_grip_hold is None else args.right_grip_hold
     if not enabled:
         return None
-    if args.task not in ("items_handover", "sample_loading", "manipulate_pipette", "table_rearrangement") or (args.task not in ("manipulate_pipette", "table_rearrangement") and not args.handover_assist):
+    if args.task not in ("items_handover", "sample_loading", "manipulate_pipette", "table_rearrangement", "mixer_operating") or (args.task not in ("manipulate_pipette", "table_rearrangement", "mixer_operating") and not args.handover_assist):
         raise ValueError("--right-grip-hold requires manipulate_pipette/table_rearrangement or handover assist for items_handover/sample_loading")
     values = {name: getattr(args, "right_grip_hold_" + name) for name in asdict(GripHoldConfig())
               if name not in ("command_cap", "model_release_enabled", "prelift_compensation", "min_contact_gap")}

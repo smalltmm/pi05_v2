@@ -1,0 +1,61 @@
+{
+  "trigger_max_tcp_z_mm": 140,
+  "trigger_radius_px": null,
+  "gripper_closed_below": 0.5,
+  "slot_require_paddle_support": true,
+  "slot_track_min_edge_support": 0.0,
+  "slot_track_reacquire_frames": 2,
+  "slot_track_max_gap_seconds": 0.5,
+  "min_tcp_z_mm": 45,
+  "prepare_j4_margin_deg": 40,
+  "prepare_min_tcp_z_mm": 90,
+  "prepare_max_rotation_deg": 15,
+  "prepare_speed_mm_s": 120,
+  "prepare_angular_speed_deg_s": 15,
+  "prepare_timeout_s": 20,
+  "prepare_position_tolerance_mm": 10,
+  "prepare_orientation_tolerance_deg": 0.75,
+  "prepare_after_right_release": true,
+  "placement_trigger": "pose",
+  "placement_pose_xyz_mm": [
+    340,
+    245,
+    285
+  ],
+  "placement_pose_tolerance_xyz_mm": [
+    70,
+    70,
+    70
+  ],
+  "placement_pose_rpy_deg": [
+    180,
+    35,
+    -150
+  ],
+  "placement_pose_orientation_tolerance_deg": 30,
+  "placement_pose_stable_seconds": 0.3,
+  "placement_prepare_joints": [
+    0.4776,
+    1.6136,
+    -0.8825,
+    -0.9539,
+    0.9555,
+    0.7692
+  ],
+  "placement_open_threshold": 0.7,
+  "placement_confirm_frames": 3,
+  "placement_prepare_timeout_s": 45,
+  "floor_approach_base_dir": [
+    0,
+    -1,
+    0
+  ],
+  "floor_approach_mm": 100,
+  "floor_approach_step_mm": 5,
+  "floor_approach_speed_mm_s": 10,
+  "floor_approach_align_tolerance_px": 5,
+  "floor_approach_lag_mm": 2,
+  "floor_approach_lag_seconds": 0.3,
+  "floor_approach_timeout_s": 30,
+  "align_speed_mm_s": 40
+}

@@ -2,3 +2,5 @@
 # The isolated OpenPI worker keeps its existing uv.lock environment.
 numpy>=1.22.4,<3
 scipy>=1.10,<2
+# mixer_operating: RGB image processing only; cameras are supplied by obs.
+opencv-python>=4.10,<5

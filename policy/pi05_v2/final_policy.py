@@ -36,7 +36,14 @@ def load_options(usr_args):
     ]
     extra = usr_args.get("pi05_assist_options") or []
     tokens.extend(shlex.split(extra) if isinstance(extra, str) else extra)
-    args = parse_options(tokens)
+    if task == "mixer_operating":
+        try:
+            from .mixer_policy import parse_mixer_options
+        except ImportError:
+            from mixer_policy import parse_mixer_options
+        args = parse_mixer_options(tokens)
+    else:
+        args = parse_options(tokens)
     if args.task != task:
         raise ValueError("pi05_assist_options cannot override task_name")
     return args

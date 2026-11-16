@@ -477,6 +477,12 @@ def get_model(usr_args: dict) -> PI05JaxWorkerClient:
         worker_args["pi05_gripper_filter"] = False
         client = PI05JaxWorkerClient(worker_args)
         try:
+            if args.task == "mixer_operating" and getattr(args, "mixer_servo", False):
+                try:
+                    from .mixer_policy import MixerFinalPolicy
+                except ImportError:
+                    from mixer_policy import MixerFinalPolicy
+                return MixerFinalPolicy(client, args)
             return FinalPolicy(client, args)
         except BaseException:
             client.close()
