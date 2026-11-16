@@ -242,23 +242,6 @@ bash "$POLICY_ROOT/eval.sh" sample_loading random "$MODEL_ROOT/sample_loading" "
 
 首次启动时需要恢复 checkpoint 并进行 JAX 编译，请等待推理 Worker 就绪后再开始评测。
 
-**说明：** 以上是本地复现所使用的评测参数，不代表官方 held-out 测试一定采用相同配置。主办方可以根据赛事评测协议调整场景、episode 数量和随机种子。
-
-### 4.2 模型与任务对应关系
-
-| Task | 提交目录 | 本次对应的本地模型目录名 | 模型 Hz / horizon / 前缀 |
-|---|---|---|---|
-| click_bell | `$MODEL_ROOT/click_bell` | `water_pouring` | 25 / 50 / 25 |
-| handle_basket | `$MODEL_ROOT/handle_basket` | `pi05-JAX-NC-FP32-6w` | 10 / 16 / 8 |
-| water_pouring | `$MODEL_ROOT/water_pouring` | `pi05-JAX-NC-FP32-8w` | 10 / 16 / 8 |
-| table_rearrangement | `$MODEL_ROOT/table_rearrangement` | `SLA-JAX-FP32-2.8w` | 10 / 16 / 8 |
-| items_handover | `$MODEL_ROOT/items_handover` | `SLA-JAX-handover-FP32-28000ft-10k` | 10 / 16 / 10 |
-| drawer_open_place | `$MODEL_ROOT/drawer_open_place` | `pi05-JAX-NC-FP32-8w` | 10 / 16 / 6 |
-| mixer_operating | `$MODEL_ROOT/mixer_operating` | `SLA-JAX-Real540-NoSample-FP32-40000ft-14k-20261114` | 10 / 16 / 8 |
-| item_assembly | `$MODEL_ROOT/item_assembly` | `pi05-JAX-NC-FP32-5w` | 10 / 16 / 8 |
-| manipulate_pipette | `$MODEL_ROOT/manipulate_pipette` | `pi05-JAX-YCNC-GripZero-FP32-10w` | 10 / 16 / 8 |
-| sample_loading | `$MODEL_ROOT/sample_loading` | `water_pouring` | 25 / 50 / 25 |
-
 ## 5. 评测结果
 
 评测程序会在终端报告各 episode 结果、最终成功率以及指标保存路径。
