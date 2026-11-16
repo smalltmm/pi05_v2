@@ -1,0 +1,18 @@
+{
+  "task": "items_handover",
+  "pose_role": "model_right_waiting",
+  "right_state_7": [
+    0.4547455310821533,
+    1.544459342956543,
+    -1.0549817085266113,
+    -0.7379601001739502,
+    -0.4481132924556732,
+    1.3785134553909302,
+    0.5699999928474426
+  ],
+  "aggregation": "median",
+  "description": "Right model-controlled waiting arm before left release; no observation-pose assistance in source",
+  "source_cycle": 17,
+  "source_frame_start": 1700,
+  "source_frame_end": 1799
+}

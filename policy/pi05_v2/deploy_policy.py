@@ -48,12 +48,11 @@ def _scalar_bool(value: Any) -> bool:
     return bool(array.size and array[0])
 
 
-
 class GripperTemporalFilter:
     """Suppress isolated gripper flips while preserving real transitions.
 
     RoboSynChallenge uses action indices 6 and 13 for the left and right
-    grippers respectively. The policy action convention is 0=open, 1=closed.
+    grippers respectively. The policy action convention is 0=closed, 1=open.
     A short median window removes one-frame spikes; a two-frame confirmation
     prevents a single opposite command from changing the held state.
     """
@@ -123,6 +122,7 @@ class GripperTemporalFilter:
                 self._last_output[index] = value
         return filtered
 
+
 def _extract_image(obs: dict, sensor_name: str) -> np.ndarray:
     image = _first_env(obs["sensor"][sensor_name]["color"])
     if image.ndim != 3:
@@ -150,7 +150,9 @@ def encode_obs(obs: dict) -> dict[str, np.ndarray]:
     state = _first_env(obs["robot"]["qpos"])
     state = np.ascontiguousarray(np.asarray(state, dtype=np.float32).reshape(-1))
     if state.size != 14:
-        state_indices = np.asarray((0, 1, 2, 3, 4, 5, 6, 16, 17, 18, 19, 20, 21, 22), dtype=np.int64)
+        state_indices = np.asarray(
+            (0, 1, 2, 3, 4, 5, 6, 16, 17, 18, 19, 20, 21, 22), dtype=np.int64
+        )
         if state.size <= int(state_indices.max()):
             raise ValueError(
                 f"Expected a 14-dim policy state or a legacy state with at least "
@@ -161,6 +163,20 @@ def encode_obs(obs: dict) -> dict[str, np.ndarray]:
     for openpi_key, sensor_name in _IMAGE_KEYS.items():
         encoded[openpi_key] = _extract_image(obs, sensor_name)
     return encoded
+
+
+def to_competition_action(action: np.ndarray) -> np.ndarray:
+    """Convert normalized openings to single-finger joint displacement in metres.
+
+    Policy/assist state stays normalized (0 closed, 1 open). The competition
+    action uses 0..0.05 m per finger, corresponding to a total gap of 0..0.10 m.
+    Copy before converting so acknowledgements retain the normalized command.
+    """
+    values = np.asarray(action, dtype=np.float32).reshape(-1).copy()
+    if values.size < 14:
+        raise ValueError("Expected a dual-arm action with grippers at indices 6 and 13")
+    values[[6, 13]] = np.clip(values[[6, 13]], 0.0, 1.0) * 0.05
+    return values
 
 
 def encode_action(action: np.ndarray, env, *, strict_dim: bool) -> torch.Tensor:
@@ -177,7 +193,7 @@ def encode_action(action: np.ndarray, env, *, strict_dim: bool) -> torch.Tensor:
             f"requires action_dim={env_action_dim}. Set strict_action_dim=false only "
             "if the extra dimensions are intentionally unused."
         )
-    action_array = np.ascontiguousarray(action_array[:env_action_dim])
+    action_array = to_competition_action(action_array[:env_action_dim])
     action_tensor = torch.as_tensor(
         action_array, dtype=torch.float32, device=env.unwrapped.device
     )
@@ -209,6 +225,11 @@ class PI05JaxWorkerClient:
         )
         self.pytorch_device = str(usr_args.get("pytorch_device", "cuda"))
         self.exec_steps = int(usr_args.get("pi05_exec_steps", 10))
+        self.action_horizon = usr_args.get("pi05_action_horizon")
+        if self.action_horizon is not None:
+            self.action_horizon = int(self.action_horizon)
+            if self.action_horizon <= 0:
+                raise ValueError("pi05_action_horizon must be positive.")
         self.num_inference_steps = int(usr_args.get("pi05_num_inference_steps", 10))
         self.compile_mode = str(usr_args.get("pi05_compile_mode", "none"))
         self.strict_action_dim = _as_bool(usr_args.get("strict_action_dim", True))
@@ -222,7 +243,9 @@ class PI05JaxWorkerClient:
         raw_gripper_indices = usr_args.get("pi05_gripper_filter_indices", "6,13")
         if isinstance(raw_gripper_indices, str):
             gripper_indices = tuple(
-                int(part.strip()) for part in raw_gripper_indices.split(",") if part.strip()
+                int(part.strip())
+                for part in raw_gripper_indices.split(",")
+                if part.strip()
             )
         else:
             gripper_indices = tuple(int(index) for index in raw_gripper_indices)
@@ -255,9 +278,13 @@ class PI05JaxWorkerClient:
         worker_env["PYTHONPATH"] = os.pathsep.join(python_paths)
         worker_env["PYTHONNOUSERSITE"] = "1"
         worker_env.pop("PYTHONHOME", None)
-        worker_env.setdefault("OPENPI_DATA_HOME", str(self.openpi_root / "runtime_assets" / "openpi"))
+        worker_env.setdefault(
+            "OPENPI_DATA_HOME", str(self.openpi_root / "runtime_assets" / "openpi")
+        )
         worker_env.setdefault("XLA_PYTHON_CLIENT_PREALLOCATE", "false")
-        worker_env.setdefault("JAX_COMPILATION_CACHE_DIR", str(self.openpi_root / ".cache" / "jax"))
+        worker_env.setdefault(
+            "JAX_COMPILATION_CACHE_DIR", str(self.openpi_root / ".cache" / "jax")
+        )
 
         worker_cmd = [
             self.python_bin,
@@ -275,6 +302,8 @@ class PI05JaxWorkerClient:
             "--compile-mode",
             self.compile_mode,
         ]
+        if self.action_horizon is not None:
+            worker_cmd.extend(["--action-horizon", str(self.action_horizon)])
         self.proc = subprocess.Popen(
             worker_cmd,
             stdin=subprocess.PIPE,
@@ -283,6 +312,10 @@ class PI05JaxWorkerClient:
             text=True,
             bufsize=1,
             env=worker_env,
+            # Real-robot monitoring handles Ctrl+C at complete frame boundaries.
+            start_new_session=_as_bool(
+                usr_args.get("pi05_worker_start_new_session", False)
+            ),
         )
         atexit.register(self.close)
         ready = self._read_response()
@@ -393,12 +426,19 @@ class PI05JaxWorkerClient:
 
 def _validate_checkpoint(checkpoint_path: Path) -> None:
     if not checkpoint_path.is_dir():
-        raise FileNotFoundError(f"Checkpoint directory does not exist: {checkpoint_path}")
+        raise FileNotFoundError(
+            f"Checkpoint directory does not exist: {checkpoint_path}"
+        )
     if not (checkpoint_path / "params").is_dir():
-        raise FileNotFoundError(f"Missing JAX checkpoint params directory: {checkpoint_path / 'params'}")
+        raise FileNotFoundError(
+            f"Missing JAX checkpoint params directory: {checkpoint_path / 'params'}"
+        )
     norm_files = list((checkpoint_path / "assets").glob("*/norm_stats.json"))
     if not norm_files:
-        raise FileNotFoundError(f"No norm_stats.json was found under {checkpoint_path / 'assets'}")
+        raise FileNotFoundError(
+            f"No norm_stats.json was found under {checkpoint_path / 'assets'}"
+        )
+
 
 def get_model(usr_args: dict) -> PI05JaxWorkerClient:
     policy_root = Path(__file__).resolve().parent
@@ -412,15 +452,33 @@ def get_model(usr_args: dict) -> PI05JaxWorkerClient:
     _validate_checkpoint(checkpoint_path)
     openpi_root = (
         Path(
-            usr_args.get("openpi_root")
-            or os.environ.get("OPENPI_ROOT")
-            or policy_root
+            usr_args.get("openpi_root") or os.environ.get("OPENPI_ROOT") or policy_root
         )
         .expanduser()
         .resolve()
     )
     if not (openpi_root / "src" / "openpi").is_dir():
         raise FileNotFoundError(f"OpenPI source directory is invalid: {openpi_root}")
+    if _as_bool(usr_args.get("pi05_final_mode", False)):
+        try:
+            from .final_policy import FinalPolicy, load_options
+        except ImportError:
+            from final_policy import FinalPolicy, load_options
+        args = load_options(usr_args)
+        worker_args = dict(
+            usr_args,
+            pi05_action_horizon=args.model_action_horizon,
+            pi05_exec_steps=args.model_action_horizon,
+        )
+        # The local finals commands use normalized opening, without the
+        # preliminary gripper filter. All final assistance lives downstream.
+        worker_args["pi05_gripper_filter"] = False
+        client = PI05JaxWorkerClient(worker_args)
+        try:
+            return FinalPolicy(client, args)
+        except BaseException:
+            client.close()
+            raise
     return PI05JaxWorkerClient(usr_args)
 
 
@@ -433,6 +491,8 @@ def _task_succeeded(env) -> bool:
 
 
 def eval(env, model: PI05JaxWorkerClient, obs):
+    if hasattr(model, "next_action"):
+        return _eval_final(env, model, obs)
     prompt = getattr(env, "_current_instruction", None)
     if not prompt:
         prompt = model.task_name.replace("_", " ")
@@ -473,3 +533,52 @@ def reset_model(model: PI05JaxWorkerClient) -> None:
 
 def close_model(model: PI05JaxWorkerClient) -> None:
     model.close()
+
+
+def _eval_final(env, model, obs):
+    """Use only official obs and env.step; every assisted frame counts."""
+    prompt = getattr(env, "_current_instruction", None)
+    final_obs, info, truncated_done = obs, {}, False
+    timings = []
+    starting_cycle = model.runtime.cycle
+    while model.runtime.steps < 1000:
+        previous_cycle = model.runtime.cycle
+        action = model.next_action(encode_obs(final_obs), prompt)
+        if model.runtime.cycle != previous_cycle:
+            timings.append(model.last_inference_seconds)
+        action_tensor = encode_action(action, env, strict_dim=model.strict_action_dim)
+        final_obs, _reward, terminated, truncated, info = env.step(action_tensor)
+        model.commit_action()
+        truncated_done = _scalar_bool(truncated)
+        step_success = _task_succeeded(env)
+        if not isinstance(info, dict):
+            info = {}
+        info["pi05_step_success"] = step_success
+        info["pi05_control_steps"] = model.runtime.steps
+        if _scalar_bool(terminated) or truncated_done or step_success:
+            break
+        if model.runtime.steps >= 1000:
+            truncated_done = True
+            break
+        if model.runtime.needs_chunk and model.runtime.cycle > starting_cycle:
+            break
+    if model.runtime.steps >= 1000 and not info.get("pi05_step_success", False):
+        truncated_done = True
+    return final_obs, info, truncated_done, timings
+
+
+def get_action(model, obs):
+    """Return one final-round joint action from an official observation.
+
+    Arm joints are radians; grippers are single-finger displacement in metres
+    (0 closed, 0.05 fully open). Observed grippers are already normalized.
+    The organizer executes it at 10 Hz and then calls commit_action(model).
+    """
+    if not hasattr(model, "next_action"):
+        raise ValueError("get_action requires pi05_final_mode=true")
+    return to_competition_action(model.next_action(encode_obs(obs)))
+
+
+def commit_action(model):
+    """Acknowledge a frame only after successful official execution."""
+    model.commit_action()

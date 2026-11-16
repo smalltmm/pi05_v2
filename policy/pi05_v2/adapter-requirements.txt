@@ -1,0 +1,4 @@
+# Install in the official evaluator Python, which already supplies torch.
+# The isolated OpenPI worker keeps its existing uv.lock environment.
+numpy>=1.22.4,<3
+scipy>=1.10,<2

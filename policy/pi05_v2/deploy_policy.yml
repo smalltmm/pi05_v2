@@ -34,3 +34,9 @@ pi05_gripper_filter_indices: "6"  # left gripper only; right gripper is unfilter
 pi05_gripper_filter_window: 5
 pi05_gripper_filter_confirm_steps: 2
 pi05_gripper_filter_threshold: 0.5
+
+# Finals: task profiles, normalized gripper opening, 10 Hz / 1000 frames.
+# Set false to use the original preliminary adapter.
+pi05_final_mode: true
+pi05_assist_profile: null
+pi05_assist_options: []

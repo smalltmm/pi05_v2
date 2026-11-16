@@ -1,9 +1,9 @@
-# PI0.5 v2 — RoboSynChallenge 评测部署
+# PI0.5 v2 — RoboSynChallenge 决赛评测部署
 
-本仓库提供 **PI0.5 v2（JAX）Policy** 的推理代码、部署配置、评测脚本和依赖锁定文件。本次提交覆盖 **RoboSynChallenge 全部 10 个任务**，每个任务使用与任务同名的 checkpoint。
+本仓库提供 **PI0.5 v2（JAX）Policy** 的推理代码、部署配置、评测脚本和依赖锁定文件。本次提交覆盖 **RoboSynChallenge 全部 10 个任务**，每个任务使用与任务同名的 checkpoint，并自动加载对应的决赛辅助配置。
 
 - **Policy 代码：** https://github.com/smalltmm/pi05_v2
-- **模型权重：** https://huggingface.co/wxhtmo/robosyn_model_v1
+- **模型权重：** https://huggingface.co/wxhtmo/robosyn_model_v2/tree/main
 - **官方 RoboSynChallenge：** https://github.com/EDEM-AI/RoboSynChallenge
 - **本地评测配置：** `random`、每任务 20 episodes、`seed=0`
 
@@ -11,9 +11,9 @@
 
 ## 1. 下载模型 Checkpoints
 
-模型仓库：https://huggingface.co/wxhtmo/robosyn_model_v1
+模型仓库：https://huggingface.co/wxhtmo/robosyn_model_v2/tree/main
 
-仓库采用 **Public + Gated Access**：仓库页面公开，但下载 checkpoint 需要访问授权。评测人员应使用**RoboSynChallenge** Hugging Face 账号认证；
+仓库采用 **Gated Access**：仓库页面公开，但下载 checkpoint 需要访问授权。评测人员应使用**RoboSynChallenge** Hugging Face 账号认证；
 
 ### 1.1 登录并下载
 
@@ -111,6 +111,9 @@ export PYTHON_BIN="$(command -v python)"
 
 cd "$POLICY_ROOT"
 
+# 在官方评测环境中安装动作辅助所需的 NumPy / SciPy
+uv pip install --python "$PYTHON_BIN" -r "$POLICY_ROOT/adapter-requirements.txt"
+
 (
     unset VIRTUAL_ENV CONDA_PREFIX
     export UV_PROJECT_ENVIRONMENT="$POLICY_ROOT/.venv"
@@ -136,7 +139,7 @@ export PI05_PYTHON="$POLICY_ROOT/.venv/bin/python"
 
 ```bash
 "$PYTHON_BIN" -c \
-"import embodichain, dexsim, robosynchallenge; print('simulator OK')"
+"import embodichain, dexsim, robosynchallenge, numpy, scipy; print('simulator and policy adapter OK')"
 ```
 
 `eval.sh` 使用 `PYTHON_BIN` 启动仿真评测，使用 `PI05_PYTHON` 启动独立推理进程。
@@ -172,47 +175,68 @@ cd "$ROBOSYN_ROOT"
 
 ### 4.1 评测命令
 
-本地评测命令格式：
+本地评测命令格式，评测前先固定CUDA版本
+```bash
+export PATH="$POLICY_ROOT/.venv/lib/python3.11/site-packages/nvidia/cuda_nvcc/bin:$PATH"
+```
 
 ```bash
 bash "$POLICY_ROOT/eval.sh" <task_name> <setting> <checkpoint_path> <gpu_id> [extra_options...]
 ```
 
-以下分别使用各任务对应的 checkpoint，采用 `random` 设置、每任务 20 episodes、无界面运行、随机种子 0。
 
 ```bash
 # 1. click_bell
-bash "$POLICY_ROOT/eval.sh" click_bell random "$MODEL_ROOT/click_bell" "$GPU_ID" --max_episodes 20 --headless true --seed 0
+bash "$POLICY_ROOT/eval.sh" click_bell random "$MODEL_ROOT/click_bell" "$GPU_ID" \
+  --pi05_final_mode true --pi05_assist_profile click_bell \
+  --max_episodes 20 --max_steps 1000 --headless true --seed 0
 
 # 2. handle_basket
-bash "$POLICY_ROOT/eval.sh" handle_basket random "$MODEL_ROOT/handle_basket" "$GPU_ID" --max_episodes 20 --headless true --seed 0
+bash "$POLICY_ROOT/eval.sh" handle_basket random "$MODEL_ROOT/handle_basket" "$GPU_ID" \
+  --pi05_final_mode true --pi05_assist_profile handle_basket \
+  --max_episodes 20 --max_steps 1000 --headless true --seed 0
 
 # 3. water_pouring
-bash "$POLICY_ROOT/eval.sh" water_pouring random "$MODEL_ROOT/water_pouring" "$GPU_ID" --max_episodes 20 --headless true --seed 0
+bash "$POLICY_ROOT/eval.sh" water_pouring random "$MODEL_ROOT/water_pouring" "$GPU_ID" \
+  --pi05_final_mode true --pi05_assist_profile water_pouring \
+  --max_episodes 20 --max_steps 1000 --headless true --seed 0
 
 # 4. table_rearrangement
-bash "$POLICY_ROOT/eval.sh" table_rearrangement random "$MODEL_ROOT/table_rearrangement" "$GPU_ID" --max_episodes 20 --headless true --seed 0
+bash "$POLICY_ROOT/eval.sh" table_rearrangement random "$MODEL_ROOT/table_rearrangement" "$GPU_ID" \
+  --pi05_final_mode true --pi05_assist_profile table_rearrangement \
+  --max_episodes 20 --max_steps 1000 --headless true --seed 0
 
 # 5. items_handover
-bash "$POLICY_ROOT/eval.sh" items_handover random "$MODEL_ROOT/items_handover" "$GPU_ID" --max_episodes 20 --headless true --seed 0
+bash "$POLICY_ROOT/eval.sh" items_handover random "$MODEL_ROOT/items_handover" "$GPU_ID" \
+  --pi05_final_mode true --pi05_assist_profile items_handover \
+  --max_episodes 20 --max_steps 1000 --headless true --seed 0
 
 # 6. drawer_open_place
-bash "$POLICY_ROOT/eval.sh" drawer_open_place random "$MODEL_ROOT/drawer_open_place" "$GPU_ID" --max_episodes 20 --headless true --seed 0
+bash "$POLICY_ROOT/eval.sh" drawer_open_place random "$MODEL_ROOT/drawer_open_place" "$GPU_ID" \
+  --pi05_final_mode true --pi05_assist_profile drawer_open_place \
+  --max_episodes 20 --max_steps 1000 --headless true --seed 0
 
 # 7. mixer_operating
-bash "$POLICY_ROOT/eval.sh" mixer_operating random "$MODEL_ROOT/mixer_operating" "$GPU_ID" --max_episodes 20 --headless true --seed 0
+bash "$POLICY_ROOT/eval.sh" mixer_operating random "$MODEL_ROOT/mixer_operating" "$GPU_ID" \
+  --pi05_final_mode true --pi05_assist_profile mixer_operating \
+  --max_episodes 20 --max_steps 1000 --headless true --seed 0
 
 # 8. item_assembly
-bash "$POLICY_ROOT/eval.sh" item_assembly random "$MODEL_ROOT/item_assembly" "$GPU_ID" --max_episodes 20 --headless true --seed 0
+bash "$POLICY_ROOT/eval.sh" item_assembly random "$MODEL_ROOT/item_assembly" "$GPU_ID" \
+  --pi05_final_mode true --pi05_assist_profile item_assembly \
+  --max_episodes 20 --max_steps 1000 --headless true --seed 0
 
 # 9. manipulate_pipette
-bash "$POLICY_ROOT/eval.sh" manipulate_pipette random "$MODEL_ROOT/manipulate_pipette" "$GPU_ID" --max_episodes 20 --headless true --seed 0
+bash "$POLICY_ROOT/eval.sh" manipulate_pipette random "$MODEL_ROOT/manipulate_pipette" "$GPU_ID" \
+  --pi05_final_mode true --pi05_assist_profile manipulate_pipette \
+  --max_episodes 20 --max_steps 1000 --headless true --seed 0
 
 # 10. sample_loading
-bash "$POLICY_ROOT/eval.sh" sample_loading random "$MODEL_ROOT/sample_loading" "$GPU_ID" --max_episodes 20 --headless true --seed 0
+bash "$POLICY_ROOT/eval.sh" sample_loading random "$MODEL_ROOT/sample_loading" "$GPU_ID" \
+  --pi05_final_mode true --pi05_assist_profile sample_loading \
+  --max_episodes 20 --max_steps 1000 --headless true --seed 0
 ```
 
-可以单独执行其中任意一行，也可以依次执行全部命令。
 
 每个任务使用 `MODEL_ROOT` 中与任务名称对应的 checkpoint。
 
@@ -222,18 +246,18 @@ bash "$POLICY_ROOT/eval.sh" sample_loading random "$MODEL_ROOT/sample_loading" "
 
 ### 4.2 模型与任务对应关系
 
-| Task | Checkpoint Path |
-|---|---|
-| click_bell | `$MODEL_ROOT/click_bell` |
-| handle_basket | `$MODEL_ROOT/handle_basket` |
-| water_pouring | `$MODEL_ROOT/water_pouring` |
-| table_rearrangement | `$MODEL_ROOT/table_rearrangement` |
-| items_handover | `$MODEL_ROOT/items_handover` |
-| drawer_open_place | `$MODEL_ROOT/drawer_open_place` |
-| mixer_operating | `$MODEL_ROOT/mixer_operating` |
-| item_assembly | `$MODEL_ROOT/item_assembly` |
-| manipulate_pipette | `$MODEL_ROOT/manipulate_pipette` |
-| sample_loading | `$MODEL_ROOT/sample_loading` |
+| Task | 提交目录 | 本次对应的本地模型目录名 | 模型 Hz / horizon / 前缀 |
+|---|---|---|---|
+| click_bell | `$MODEL_ROOT/click_bell` | `water_pouring` | 25 / 50 / 25 |
+| handle_basket | `$MODEL_ROOT/handle_basket` | `pi05-JAX-NC-FP32-6w` | 10 / 16 / 8 |
+| water_pouring | `$MODEL_ROOT/water_pouring` | `pi05-JAX-NC-FP32-8w` | 10 / 16 / 8 |
+| table_rearrangement | `$MODEL_ROOT/table_rearrangement` | `SLA-JAX-FP32-2.8w` | 10 / 16 / 8 |
+| items_handover | `$MODEL_ROOT/items_handover` | `SLA-JAX-handover-FP32-28000ft-10k` | 10 / 16 / 10 |
+| drawer_open_place | `$MODEL_ROOT/drawer_open_place` | `pi05-JAX-NC-FP32-8w` | 10 / 16 / 6 |
+| mixer_operating | `$MODEL_ROOT/mixer_operating` | `SLA-JAX-Real540-NoSample-FP32-40000ft-14k-20261114` | 10 / 16 / 8 |
+| item_assembly | `$MODEL_ROOT/item_assembly` | `pi05-JAX-NC-FP32-5w` | 10 / 16 / 8 |
+| manipulate_pipette | `$MODEL_ROOT/manipulate_pipette` | `pi05-JAX-YCNC-GripZero-FP32-10w` | 10 / 16 / 8 |
+| sample_loading | `$MODEL_ROOT/sample_loading` | `water_pouring` | 25 / 50 / 25 |
 
 ## 5. 评测结果
 
