@@ -477,12 +477,6 @@ def get_model(usr_args: dict) -> PI05JaxWorkerClient:
         worker_args["pi05_gripper_filter"] = False
         client = PI05JaxWorkerClient(worker_args)
         try:
-            if args.task == "mixer_operating" and getattr(args, "mixer_servo", False):
-                try:
-                    from .mixer_policy import MixerFinalPolicy
-                except ImportError:
-                    from mixer_policy import MixerFinalPolicy
-                return MixerFinalPolicy(client, args)
             return FinalPolicy(client, args)
         except BaseException:
             client.close()
@@ -499,40 +493,24 @@ def _task_succeeded(env) -> bool:
 
 
 def eval(env, model: PI05JaxWorkerClient, obs):
-    if hasattr(model, "next_action"):
-        return _eval_final(env, model, obs)
-    prompt = getattr(env, "_current_instruction", None)
-    if not prompt:
-        prompt = model.task_name.replace("_", " ")
-
-    infer_started = time.perf_counter()
-    encoded_obs = encode_obs(obs)
-    actions = model.infer(encoded_obs, prompt=str(prompt))
-    action_tensors = [
-        encode_action(action, env, strict_dim=model.strict_action_dim)
-        for action in actions
-    ]
-    infer_elapsed = time.perf_counter() - infer_started
-
-    final_obs = obs
-    info: dict = {}
-    truncated_done = False
+    """Precompute once; this loop is accepted by the official ChunkBridge."""
+    try:
+        from .pi05_assists.chunk_delivery import prepare_eval_chunk
+    except ImportError:
+        from pi05_assists.chunk_delivery import prepare_eval_chunk
+    block = prepare_eval_chunk(
+        env, model, obs, encode_obs=encode_obs, encode_action=encode_action,
+        start_inference=start_inference, finish_inference=finish_inference,
+        scalar_bool=_scalar_bool, task_succeeded=_task_succeeded,
+    )
+    action_tensors = block.actions
+    final_obs, info, truncated_done = obs, {}, block.truncated_done
     for action_tensor in action_tensors:
         final_obs, _reward, terminated, truncated, info = env.step(action_tensor)
-        terminated_done = _scalar_bool(terminated)
-        truncated_done = _scalar_bool(truncated)
-        step_success = _task_succeeded(env)
-        if not isinstance(info, dict):
-            info = {}
-        info["pi05_step_success"] = step_success
-        stop_signal = terminated_done or truncated_done or step_success
-        if stop_signal:
+        info, truncated_done, truncated = block.after_step(terminated, truncated, info)
+        if truncated:
             break
-
-    # RoboSynChallenge's evaluation loop expects four return values:
-    # observation, info, truncated, and per-inference timing samples.
-    # Success stops the chunk, but must not be reported as a time-limit truncation.
-    return final_obs, info, truncated_done, [infer_elapsed]
+    return final_obs, info, truncated_done, block.timings
 
 
 def reset_model(model: PI05JaxWorkerClient) -> None:
@@ -544,34 +522,8 @@ def close_model(model: PI05JaxWorkerClient) -> None:
 
 
 def _eval_final(env, model, obs):
-    """Use only official obs and env.step; every assisted frame counts."""
-    prompt = getattr(env, "_current_instruction", None)
-    final_obs, info, truncated_done = obs, {}, False
-    timings = []
-    starting_cycle = model.runtime.cycle
-    while model.runtime.steps < 1000:
-        infer_started = start_inference(env.unwrapped.device)
-        action = model.next_action(encode_obs(final_obs), prompt)
-        action_tensor = encode_action(action, env, strict_dim=model.strict_action_dim)
-        finish_inference(infer_started, timings, env.unwrapped.device)
-        final_obs, _reward, terminated, truncated, info = env.step(action_tensor)
-        model.commit_action()
-        truncated_done = _scalar_bool(truncated)
-        step_success = _task_succeeded(env)
-        if not isinstance(info, dict):
-            info = {}
-        info["pi05_step_success"] = step_success
-        info["pi05_control_steps"] = model.runtime.steps
-        if _scalar_bool(terminated) or truncated_done or step_success:
-            break
-        if model.runtime.steps >= 1000:
-            truncated_done = True
-            break
-        if model.runtime.needs_chunk and model.runtime.cycle > starting_cycle:
-            break
-    if model.runtime.steps >= 1000 and not info.get("pi05_step_success", False):
-        truncated_done = True
-    return final_obs, info, truncated_done, timings
+    """Compatibility entry; the public eval now handles complete final blocks."""
+    return eval(env, model, obs)
 
 
 def get_action(model, obs):
@@ -583,7 +535,8 @@ def get_action(model, obs):
     """
     if not hasattr(model, "next_action"):
         raise ValueError("get_action requires pi05_final_mode=true")
-    return to_competition_action(model.next_action(encode_obs(obs)))
+    encoded = encode_obs(obs) if model.runtime.needs_chunk else None
+    return to_competition_action(model.next_action(encoded))
 
 
 def commit_action(model):

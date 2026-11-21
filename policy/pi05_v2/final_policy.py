@@ -2,7 +2,6 @@
 
 from pathlib import Path
 import json
-import logging
 import shlex
 import time
 
@@ -10,11 +9,11 @@ import numpy as np
 
 try:
     from .pi05_assists.options import parse_options
-    from .pi05_assists.runtime import AssistRuntime, clip_actions
+    from .pi05_assists.chunk_runtime import ChunkRuntime
     from .pi05_assists.config import TASK_PROMPTS
 except ImportError:
     from pi05_assists.options import parse_options
-    from pi05_assists.runtime import AssistRuntime, clip_actions
+    from pi05_assists.chunk_runtime import ChunkRuntime
     from pi05_assists.config import TASK_PROMPTS
 
 
@@ -49,6 +48,10 @@ def load_options(usr_args):
     return args
 
 
+class PolicyFailure(RuntimeError):
+    """Unrecoverable episode error, forwarded by the organizer bridge's error channel."""
+
+
 class FinalPolicy:
     """One episode per instance. Call commit_action after each executed frame.
 
@@ -62,67 +65,53 @@ class FinalPolicy:
         self.args = args
         self.task_name = args.task
         self.strict_action_dim = client.strict_action_dim
-        self.runtime = AssistRuntime(args)
+        self.runtime = ChunkRuntime(args)
         self.last_inference_seconds = 0.0
+        self.failure = None
 
     def next_action(self, encoded_obs, prompt=None, *, feedback=None):
+        if self.failure is not None:
+            raise PolicyFailure(self.failure)
         if self.runtime.pending is not None:
             raise RuntimeError(
                 "Call commit_action after official execution before requesting another action"
             )
         if self.runtime.steps >= 1000:
             raise StopIteration("RoboSyn episode reached 1000 executed frames")
-        state = encoded_obs["observation/state"]
-        # A helper can reject a stale chunk. Re-infer once from the measured obs.
-        for _ in range(2):
-            if self.runtime.needs_chunk:
-                observation = dict(encoded_obs)
-                observation["observation/state"] = self.runtime.model_state(state)
-                started = time.perf_counter()
-                raw = self.client.infer(
-                    observation,
-                    str(prompt or self.args.prompt or TASK_PROMPTS[self.task_name]),
-                )
-                self.last_inference_seconds = time.perf_counter() - started
-                # Structural API errors are not recoverable numeric fluctuations.
-                raw = np.asarray(raw, dtype=np.float32)
-                if raw.ndim != 2 or raw.shape[1] != 14 or len(raw) == 0:
-                    raise ValueError("Expected nonempty model actions [T,14]")
-                try:
-                    self.runtime.begin_chunk(raw, state)
-                except (ValueError, FloatingPointError, np.linalg.LinAlgError) as exc:
-                    return self._recovery_hold(state, str(exc))
-            try:
-                action = self.runtime.propose(state, feedback=feedback)
-            except (ValueError, FloatingPointError, np.linalg.LinAlgError) as exc:
-                return self._recovery_hold(state, str(exc))
-            if action is not None:
-                return action
-        return self._recovery_hold(state, "Assistance rejected two chunks")
-
-    def _recovery_hold(self, state, reason):
-        """Discard failed plans, hold one frame, then infer from fresh feedback."""
-        logging.getLogger(__name__).warning("Policy recovery: %s; holding one frame", reason)
-        old = self.runtime
-        runtime = AssistRuntime(self.args)
-        runtime.steps = old.steps
-        runtime.cycle = max(0, old.cycle)
-        runtime.previous = old.previous
-        target = clip_actions(state[None, :])[0]
-        runtime.pending = dict(
-            current=state.copy(), target=target.copy(), recovery_hold=True,
-            record={"recovery": reason},
-        )
-        self.runtime = runtime
-        return target.copy()
+        # Cached frames never access observations (not even joint positions).
+        if not self.runtime.needs_chunk:
+            return self.runtime.propose()
+        try:
+            state = encoded_obs["observation/state"]
+            observation = dict(encoded_obs)
+            observation["observation/state"] = self.runtime.model_state(state)
+            started = time.perf_counter()
+            raw = self.client.infer(
+                observation,
+                str(prompt or self.args.prompt or TASK_PROMPTS[self.task_name]),
+            )
+            self.last_inference_seconds = time.perf_counter() - started
+            raw = np.asarray(raw, dtype=np.float32)
+            if raw.ndim != 2 or raw.shape[1] != 14 or len(raw) == 0:
+                raise ValueError("Expected nonempty model actions [T,14]")
+            if not np.isfinite(raw).all():
+                raise ValueError("Model actions contain nonfinite values")
+            # Recoverable auxiliary failures already fall back to a valid model
+            # block inside ChunkRuntime. Anything escaping here cannot continue.
+            self.runtime.begin_chunk(raw, state)
+            return self.runtime.propose()
+        except Exception as exc:
+            self.failure = f"{type(exc).__name__}: {exc}"
+            raise PolicyFailure(self.failure) from exc
 
     def commit_action(self):
         self.runtime.commit()
 
     def reset(self):
         self.client.reset()
-        self.runtime = AssistRuntime(self.args)
+        self.runtime = ChunkRuntime(self.args)
         self.last_inference_seconds = 0.0
+        self.failure = None
 
     def close(self):
         self.client.close()

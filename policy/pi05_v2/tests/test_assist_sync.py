@@ -119,7 +119,10 @@ def test_pipette_trigger_gets_unsampled_unclipped_full_raw_chunk(monkeypatch):
 
 
 def test_assembly_pickup_owns_grasp_before_insertion_and_commits_once(monkeypatch):
-    rt = AssistRuntime(load_options({"task_name": "item_assembly"}))
+    rt = AssistRuntime(load_options({
+        "task_name": "item_assembly",
+        "pi05_assist_options": '--grasp-dip --left-grasp-dip-z-range-mm 130 180 --left-grasp-dip-target-z-mm 130 --right-grasp-dip-z-range-mm 130 180 --right-grasp-dip-target-z-mm 130 --grasp-dip-max-drop-mm 132 --grasp-dip-max-tilt-deg 30 --grasp-dip-close-threshold 0.6 --grasp-dip-open-threshold 0.7 --assembly-trigger-lift-mm 40 --assembly-pickup-lift-speed-mm-s 40 --assembly-grasp-assist --assembly-insert --assembly-stop-tip-distance-mm 213 --assembly-step-mm 3'
+    }))
     q = state()
     rt.begin_chunk(np.tile(q, (16, 1)), q)
     # A confirmed helper grasp makes pickup own that arm; insertion must wait.

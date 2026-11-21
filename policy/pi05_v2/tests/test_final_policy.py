@@ -12,7 +12,7 @@ import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
-from final_policy import FinalPolicy, load_options
+from final_policy import FinalPolicy, PolicyFailure, load_options
 from pi05_assists.options import parse_options
 from pi05_assists.runtime import AssistRuntime
 from pi05_assists.grasp_dip import make_piper_fk
@@ -71,18 +71,18 @@ def test_all_task_profiles_construct_and_produce_finite_actions(task):
     assert model.runtime.steps == 3
 
 
-def test_each_frame_uses_measured_obs_and_only_commit_advances():
+def test_only_block_boundary_uses_measured_obs_and_only_commit_advances():
     model = plain_policy()
     q = state()
     a = model.next_action(observation(q))
     assert model.runtime.steps == 0
-    np.testing.assert_array_equal(model.runtime.pending["current"], q)
+    np.testing.assert_array_equal(model.client.seen[0][0]["observation/state"], q)
     with pytest.raises(RuntimeError, match="commit_action"):
         model.next_action(observation(q))
     model.commit_action()
     q[0] += 0.1
     model.next_action(observation(q))
-    np.testing.assert_array_equal(model.runtime.pending["current"], q)
+    np.testing.assert_array_equal(model.runtime.pending["target"], a)
     assert model.runtime.steps == 1
     model.commit_action()
     assert len(model.client.seen) == 1
@@ -95,7 +95,7 @@ def test_offsets_apply_once_and_do_not_modify_physical_feedback():
     args = parse_options(
         [
             "--task",
-            "mixer_operating",
+            "drawer_open_place",
             "--gripper-offset-compensation",
             "--left-gripper-offset",
             ".1",
@@ -111,7 +111,7 @@ def test_offsets_apply_once_and_do_not_modify_physical_feedback():
     )
     np.testing.assert_allclose(a[[6, 13]], [0.7, 0.6])
     np.testing.assert_array_equal(q, state())
-    np.testing.assert_array_equal(model.runtime.pending["current"], q)
+    np.testing.assert_array_equal(q, state())
 
 
 def test_1000_frames_including_assists_and_reset():
@@ -148,13 +148,15 @@ def test_observation_values_pass_through_without_validation_or_replacement(value
     q[[0, 6, 13]] = value
     original = q.copy()
     for _ in range(4):
-        model.runtime.row = len(model.runtime.control)
+        # Drain the previous block before supplying another boundary obs.
+        while not model.runtime.needs_chunk:
+            model.next_action(None)
+            model.commit_action()
         action = model.next_action(observation(q))
         np.testing.assert_array_equal(model.client.seen[-1][0]["observation/state"], original)
-        np.testing.assert_array_equal(model.runtime.pending["current"], original)
         np.testing.assert_array_equal(action, state())
         model.commit_action()
-    assert model.runtime.steps == 4
+    assert len(model.client.seen) == 4
     np.testing.assert_array_equal(q, original)
     assert not caplog.records
 
@@ -167,7 +169,8 @@ def test_gripper_observation_overshoot_is_preserved_without_stopping(task):
     original = q.copy()
     action = model.next_action(observation(q))
     assert np.isfinite(action).all()
-    np.testing.assert_array_equal(model.runtime.pending["current"][[6, 13]], original[[6, 13]])
+    expected = np.clip(original[[6, 13]], 0, 1) if model.args.gripper_offset_compensation else original[[6, 13]]
+    np.testing.assert_array_equal(model.client.seen[0][0]["observation/state"][[6, 13]], expected)
     np.testing.assert_array_equal(q, original)
     model.commit_action()
     assert model.runtime.steps == 1
@@ -181,76 +184,80 @@ def test_gripper_calibration_saturates_normalized_values():
     assert calibration.model_to_mm(1.3) == 100
 
 
-@pytest.mark.parametrize("during_propose", [False, True])
-def test_floor_failure_holds_then_reinfers_without_committing_failed_helpers(monkeypatch, during_propose):
+def test_floor_failure_executes_model_block_then_replans(monkeypatch):
     model = plain_policy("table_rearrangement")
     q = state()
-    if during_propose:
-        model.next_action(observation(q))
-        model.commit_action()
-    before = model.runtime.steps
-    previous_runtime = model.runtime
-
-    def fail(actions):
+    model.client.rows[:, 0] += np.arange(len(model.client.rows)) * .01
+    original_runtime = model.runtime
+    from pi05_assists.model_z_floor import ModelZFloor
+    original_apply = ModelZFloor.apply
+    def fail(helper, actions):
         raise ValueError("model Z floor IK failed")
-
-    monkeypatch.setattr(previous_runtime.floor, "apply", fail)
+    monkeypatch.setattr(ModelZFloor, "apply", fail)
     target = model.next_action(observation(q))
-    np.testing.assert_allclose(target, q)
-    assert model.runtime.steps == before
-    assert model.runtime.pending["recovery_hold"]
+    assert model.runtime is original_runtime
+    assert not model.runtime.pending.get("recovery_hold")
+    np.testing.assert_allclose(target, model.client.rows[0])
+    count = len(model.runtime.control)
     model.commit_action()
-    assert model.runtime.steps == before + 1
-    assert "IK failed" in model.runtime.last_record["recovery"]
-    assert model.runtime.needs_chunk
-    inferred = len(model.client.seen)
+    for i in range(1, count):
+        np.testing.assert_allclose(model.next_action(None), model.client.rows[i])
+        model.commit_action()
+    assert model.runtime.steps == count and len(model.client.seen) == 1
+    assert "IK failed" in model.runtime.last_record["assist_error"]
+    monkeypatch.setattr(ModelZFloor, "apply", original_apply)
     model.next_action(observation(q))
-    assert len(model.client.seen) == inferred + 1
-    assert not model.runtime.pending.get("recovery_hold")
-    model.commit_action()
-    assert model.runtime.steps == before + 2
-
-
-def test_nonfinite_model_output_holds_and_recovers():
-    model = plain_policy("drawer_open_place")
-    model.client.rows[0, 0] = np.nan
-    target = model.next_action(observation(state()))
-    np.testing.assert_allclose(target, state())
-    model.commit_action()
-    model.client.rows[0, 0] = state()[0]
-    model.next_action(observation(state()))
-    assert not model.runtime.pending.get("recovery_hold")
-    model.commit_action()
-    assert model.runtime.steps == 2
-
-
-def test_repeated_rejected_chunks_hold_one_frame_then_recover(monkeypatch):
-    model = plain_policy("drawer_open_place")
-
-    def reject(*args, **kwargs):
-        model.runtime.row = len(model.runtime.control)
-        return None
-
-    monkeypatch.setattr(model.runtime, "propose", reject)
-    target = model.next_action(observation(state()))
-    np.testing.assert_allclose(target, state())
     assert len(model.client.seen) == 2
-    assert model.runtime.steps == 0
-    model.commit_action()
+    assert model.runtime.pending["record"]["kind"] != "model_fallback"
+
+
+@pytest.mark.parametrize("value", [np.nan, np.inf, -np.inf])
+def test_nonfinite_model_output_fails_without_hold_and_requires_reset(value):
+    model = plain_policy("drawer_open_place")
+    model.client.rows[0, 0] = value
+    with pytest.raises(PolicyFailure, match="nonfinite"):
+        model.next_action(observation(state()))
+    assert model.runtime.steps == 0 and model.runtime.pending is None
+    assert model.runtime.needs_chunk and len(model.client.seen) == 1
+    model.client.rows[0, 0] = state()[0]
+    with pytest.raises(PolicyFailure, match="nonfinite"):
+        model.next_action(observation(state()))
+    assert len(model.client.seen) == 1
+    model.reset()
     model.next_action(observation(state()))
-    assert len(model.client.seen) == 3
-    assert not model.runtime.pending.get("recovery_hold")
+    model.commit_action()
+    assert model.runtime.steps == 1
 
 
-def test_repeated_numeric_failure_in_eval_still_stops_at_frame_limit():
+@pytest.mark.parametrize("rows", [np.zeros((0, 14)), np.zeros((2, 13)), np.zeros(14)])
+def test_malformed_model_output_fails_without_proposing_action(rows):
+    model = plain_policy()
+    model.client.rows = rows
+    with pytest.raises(PolicyFailure, match="nonempty model actions"):
+        model.next_action(observation(state()))
+    assert model.runtime.steps == 0 and model.runtime.pending is None
+
+
+def test_unrecoverable_planning_error_is_explicit_and_does_not_reinfer(monkeypatch):
+    model = plain_policy("drawer_open_place")
+    def reject(*args, **kwargs):
+        raise ValueError("rejected plan")
+    monkeypatch.setattr(model.runtime, "begin_chunk", reject)
+    for _ in range(2):
+        with pytest.raises(PolicyFailure, match="rejected plan"):
+            model.next_action(observation(state()))
+    assert len(model.client.seen) == 1
+    assert model.runtime.steps == 0 and model.runtime.pending is None
+
+
+def test_invalid_model_in_eval_returns_no_holding_action():
     model = plain_policy("drawer_open_place")
     model.client.rows[0, 0] = np.nan
     model.runtime.steps = 999
     env = Env()
-    _, info, truncated, _ = deploy_policy.eval(env, model, env.obs())
-    assert truncated
-    assert env.count == 1
-    assert info["pi05_control_steps"] == model.runtime.steps == 1000
+    with pytest.raises(PolicyFailure, match="nonfinite"):
+        deploy_policy.eval(env, model, env.obs())
+    assert env.count == 0 and model.runtime.steps == 999
 
 
 def test_no_hardware_dependencies_in_submission_helpers():
@@ -316,7 +323,8 @@ def test_official_eval_stops_success_and_commits_exactly_executed_frames():
     model = plain_policy()
     obs, info, truncated, timings = deploy_policy.eval(env, model, env.obs())
     assert info["pi05_step_success"] and not truncated
-    assert env.count == model.runtime.steps == len(timings) == 2
+    assert env.count == model.runtime.steps == 2
+    assert len(timings) == 1
 
 
 def test_official_eval_finishes_one_chunk_and_reinfers_next_call():

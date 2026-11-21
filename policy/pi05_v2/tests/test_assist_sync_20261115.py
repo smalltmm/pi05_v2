@@ -49,7 +49,10 @@ class FK:
 
 def test_basket_release_advances_then_opens_across_chunks_only_after_commit():
     runtime = AssistRuntime(load_options({
-        "task_name": "handle_basket", "pi05_assist_options": "--legacy-steps 3"
+        "task_name": "handle_basket",
+        "pi05_assist_options": ("--legacy-steps 3 --basket-left-release-advance "
+                               "--basket-left-release-forward-mm 50 "
+                               "--basket-left-release-speed-mm-s 100")
     }))
     assert runtime.dip is None and runtime.basket_release is not None
     runtime.basket_release.fk = FK((0., 90., 0.))
