@@ -826,3 +826,35 @@ def test_invalid_model_is_not_sent_as_auxiliary_failure_fallback():
     with pytest.raises(PolicyFailure, match="nonfinite"):
         model.next_action({"observation/state": state()})
     assert model.runtime.pending is None and model.runtime.steps == 0
+
+
+def test_pipette_solver_timeout_sends_model_block_then_retries(monkeypatch):
+    import json
+    from pi05_assists import kinematics
+    from pi05_assists.pipette_press import DEFAULT_REFERENCE, MAX_PLANNING_SECONDS
+    q = np.asarray(json.loads(DEFAULT_REFERENCE.read_text())["state_14"], np.float32)
+    model = policy("manipulate_pipette", q)
+    model.runtime.planner.grips[1] = GripIntent(True, q[13])
+    monkeypatch.setattr(ChunkPlanner, "_pipette_ready", lambda *args: True)
+    clock, calls = [0.], []
+    monkeypatch.setattr(kinematics.time, "perf_counter", lambda: clock[0])
+    original = kinematics.least_squares
+
+    def delayed_solve(*args, **kwargs):
+        calls.append(1)
+        clock[0] += MAX_PLANNING_SECONDS + .1
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(kinematics, "least_squares", delayed_solve)
+    for attempt in range(2):
+        model.next_action({"observation/state": q})
+        assert len(calls) == attempt + 1  # no clearance/random retries on timeout
+        assert all(r["kind"] == "model_fallback" for r in model.runtime.records)
+        assert "time budget exceeded" in model.runtime.records[0]["assist_error"]
+        assert model.runtime._planned.helpers.pipette.path == []
+        np.testing.assert_array_equal(model.runtime.control[:, :6],
+                                      np.tile(q[:6], (len(model.runtime.control), 1)))
+        model.commit_action()
+        while not model.runtime.needs_chunk:
+            model.next_action(NoObservation())
+            model.commit_action()

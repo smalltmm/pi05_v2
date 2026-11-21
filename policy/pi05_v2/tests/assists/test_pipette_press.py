@@ -76,7 +76,9 @@ def test_live_wrist_limit_failure_uses_continuous_clearance_path(ready_only):
     press = PipettePress(PipettePressConfig(ready_only=ready_only, depth_mm=20, step_mm=4), make_piper_fk())
     assert press.plan(physical, cycle=0), press.reason
     assert press.approach_method == 'joint_clearance'
-    assert press.approach_fallback_reason == 'pipette IK branch discontinuity'
+    # A failed local solve now skips random wrist branches and immediately
+    # selects the same continuous clearance route.
+    assert 'no IK solution' in press.approach_fallback_reason
     assert press.labels[0] == 'reconfigure'
     rows = np.stack([physical, *press.path])
     assert np.max(np.abs(np.diff(rows[:, :6], axis=0))) <= 0.03001

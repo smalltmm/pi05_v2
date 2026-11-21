@@ -1,6 +1,7 @@
 """Pure fingertip geometry and bounded IK; returns joint targets only."""
 from __future__ import annotations
 from itertools import pairwise
+import time
 
 
 import numpy as np
@@ -32,6 +33,8 @@ def solve_ik(
     position_tolerance_mm: float = DEFAULT_POSITION_TOLERANCE_MM,
     orientation_tolerance_deg: float = DEFAULT_ORIENTATION_TOLERANCE_DEG,
     prefer_local_solution: bool = False,
+    local_only: bool = False,
+    deadline: float | None = None,
     joint_min: np.ndarray | None = None,
     joint_max: np.ndarray | None = None,
 ) -> tuple[np.ndarray, float, float]:
@@ -40,6 +43,8 @@ def solve_ik(
     Online callers may accept a valid solution seeded from the current joints
     immediately. If that local solve fails, retain the full nearest-solution
     search instead of accepting the first arbitrary random-seed branch.
+    Continuous paths may request local_only to avoid searching unrelated joint
+    branches. An optional monotonic deadline bounds all numerical retries.
     """
     if not np.isfinite(position_tolerance_mm) or position_tolerance_mm <= 0:
         raise ValueError("position tolerance must be finite and positive")
@@ -55,13 +60,16 @@ def solve_ik(
     target_rotation = Rotation.from_euler("xyz", target_rpy_deg, degrees=True)
 
     def residual(joints: np.ndarray) -> np.ndarray:
+        if deadline is not None and time.perf_counter() >= deadline:
+            raise TimeoutError("IK planning time budget exceeded")
         pose = np.asarray(fk.pose(joints), dtype=float)
         rotation = Rotation.from_euler("xyz", pose[3:], degrees=True)
         return np.r_[(fingertip_xyz(pose) - target_xyz) / 100.0, (target_rotation.inv() * rotation).as_rotvec()]
 
     rng = np.random.default_rng(9)
     starts = [np.clip(current_joints, lower, upper)]
-    starts.extend(lower + (upper - lower) * rng.random(6) for _ in range(100))
+    if not local_only:
+        starts.extend(lower + (upper - lower) * rng.random(6) for _ in range(100))
     candidates: list[tuple[float, np.ndarray, float, float]] = []
     for seed_index, start in enumerate(starts):
         result = least_squares(

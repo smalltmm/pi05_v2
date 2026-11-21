@@ -226,17 +226,8 @@
       "--basket-left-grip-hold",
       "--basket-left-grip-open-threshold",
       "0.60",
-      "--basket-right-grip-hold",
       "--basket-left-grip-close-threshold",
-      "0.5",
-      "--basket-right-grip-command-cap",
-      "0.2",
-      "--basket-right-grip-close-threshold",
-      "0.4",
-      "--basket-right-grip-open-threshold",
-      "0.50",
-      "--basket-right-grip-release-delta",
-      "0.05"
+      "0.5"
     ],
     "source": "User-provided complete command, synced 2026-11-15; official execution remains 10 Hz / 1000 frames."
   },

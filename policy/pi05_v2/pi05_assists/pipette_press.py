@@ -6,6 +6,7 @@ import argparse
 from dataclasses import asdict, dataclass
 import json
 from pathlib import Path
+import time
 
 import numpy as np
 from scipy.spatial.transform import Rotation
@@ -17,6 +18,13 @@ from .relative_handover import checked_transform, pose_error
 
 
 DEFAULT_REFERENCE = Path(__file__).parent / "calibration/pipette_press_20261107_063626_utc.json"
+# Leave slow/unreachable auxiliary plans to the next fresh model block.
+MAX_PLANNING_SECONDS = 2.0
+
+
+def _check_deadline(deadline):
+    if deadline is not None and time.perf_counter() >= deadline:
+        raise TimeoutError("Pipette planning time budget exceeded")
 
 
 @dataclass(frozen=True)
@@ -163,7 +171,7 @@ class PipettePress:
         # Finish this chunk and one complete fresh chunk before another attempt.
         self.retry_after_cycle = cycle + 1
 
-    def _joint_approach(self, state, target_q):
+    def _joint_approach(self, state, target_q, *, deadline=None):
         """Continuous wrist reconfiguration above the work, with sampled FK checks."""
         cfg = self.config
         first, right = self.tips(state)
@@ -182,6 +190,7 @@ class PipettePress:
             previous = first
             ratio = 1.
             for alpha in np.linspace(0, 1, count + 1)[1:]:
+                _check_deadline(deadline)
                 row = state.copy()
                 row[:6] = state[:6] + alpha * delta
                 if np.any(row[:6] < PIPER_JOINT_MIN) or np.any(row[:6] > PIPER_JOINT_MAX):
@@ -223,6 +232,7 @@ class PipettePress:
 
     def plan(self, physical, *, cycle):
         cfg = self.config
+        deadline = time.perf_counter() + MAX_PLANNING_SECONDS
         self.path, self.labels, self.tip_targets = [], [], []
         self.reason = None
         self.approach_method = "cartesian"
@@ -256,7 +266,8 @@ class PipettePress:
                                          Rotation.from_matrix(goal[:3, :3]).as_euler("xyz", degrees=True),
                                          position_tolerance_mm=cfg.position_tolerance_mm,
                                          orientation_tolerance_deg=cfg.orientation_tolerance_deg,
-                                         prefer_local_solution=True)
+                                         prefer_local_solution=True,
+                                         local_only=True, deadline=deadline)
                     if not np.isfinite(new).all() or np.any(new < PIPER_JOINT_MIN) or np.any(new > PIPER_JOINT_MAX):
                         raise ValueError("pipette IK joint limits exceeded")
                     if np.max(np.abs(new - q)) > .03:
@@ -299,12 +310,12 @@ class PipettePress:
                 rpy = Rotation.from_matrix(self.target[:3, :3]).as_euler("xyz", degrees=True)
                 kwargs = dict(position_tolerance_mm=cfg.position_tolerance_mm,
                               orientation_tolerance_deg=cfg.orientation_tolerance_deg,
-                              prefer_local_solution=True)
+                              prefer_local_solution=True, deadline=deadline)
                 final_q, _, _ = solve_ik(self.fk, self.reference_left_q, self.target[:3, 3], rpy, **kwargs)
                 pre = self.target.copy()
                 pre[2, 3] += cfg.approach_clearance_mm
                 pre_q, _, _ = solve_ik(self.fk, final_q, pre[:3, 3], rpy, **kwargs)
-                actual_pre = self._joint_approach(state, pre_q)
+                actual_pre = self._joint_approach(state, pre_q, deadline=deadline)
                 q = pre_q.copy()
                 segment(actual_pre, self.target, "approach")
             if not cfg.ready_only:
@@ -324,8 +335,9 @@ class PipettePress:
                 if cfg.count > 1:
                     segment(ready, self.target, "approach")
             if self.timed_motion:
-                self._time_path(state)
-        except (ValueError, RuntimeError) as exc:
+                self._time_path(state, deadline=deadline)
+            _check_deadline(deadline)
+        except (ValueError, RuntimeError, TimeoutError) as exc:
             self.path, self.labels, self.tip_targets = [], [], []
             self.defer(str(exc), cycle)
             return False
@@ -333,11 +345,12 @@ class PipettePress:
         self.phase = self.labels[0]
         return True
 
-    def _time_path(self, start):
+    def _time_path(self, start, *, deadline=None):
         """Sample each phase at control_hz, retaining its final arrival target."""
         path, labels, targets = [], [], []
         begin = 0
         while begin < len(self.path):
+            _check_deadline(deadline)
             end = begin + 1
             label = self.labels[begin]
             speed = self.config.move_speed_mm_s or 40.
@@ -357,6 +370,7 @@ class PipettePress:
             samples = np.linspace(0., times[-1], count + 1)[1:]
             commands = np.column_stack([np.interp(samples, times, rows[:, j]) for j in range(14)]).astype(np.float32)
             for row in commands:
+                _check_deadline(deadline)
                 path.append(row)
                 labels.append(label)
                 targets.append(self.tips(row)[0])
